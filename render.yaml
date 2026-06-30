@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: discord-lua-host-bot
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: CLIENT_ID
+        sync: false
+      - key: GUILD_ID
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_SSL
+        value: "false"
+      - key: BOT_OWNER_IDS
+        sync: false
+      - key: ALLOWED_HOST_ROLE_ID
+        sync: false
+      - key: MAX_SCRIPT_BYTES
+        value: "256000"
+      - key: REQUIRE_HWID
+        value: "false"
