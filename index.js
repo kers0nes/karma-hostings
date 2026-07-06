@@ -67,6 +67,12 @@ db.serialize(() => {
         category_id TEXT,
         support_role_id TEXT
     )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS panel_roles (
+        guild_id TEXT,
+        role_id TEXT,
+        PRIMARY KEY (guild_id, role_id)
+    )`);
 });
 
 // ---------- BOT ----------
@@ -93,8 +99,8 @@ function generateKey(length = 16) {
 // ---------- COMMANDS ----------
 const commands = [
     new SlashCommandBuilder()
-        .setName('panelsetup')
-        .setDescription('Create a Duel Panel in the current channel')
+        .setName('panel')
+        .setDescription('Create a Source Panel in the current channel')
         .addStringOption(opt => opt.setName('title').setDescription('Panel title').setRequired(true))
         .addStringOption(opt => opt.setName('description').setDescription('Panel description').setRequired(true)),
 
@@ -132,6 +138,11 @@ const commands = [
         .setDescription('Timeout a user and delete their tickets')
         .addUserOption(opt => opt.setName('user').setDescription('User to mute').setRequired(true))
         .addIntegerOption(opt => opt.setName('minutes').setDescription('Minutes to mute').setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('setpanelrole')
+        .setDescription('Set the role users get when they redeem a key')
+        .addRoleOption(opt => opt.setName('role').setDescription('Role to give').setRequired(true)),
 ];
 
 // ---------- REGISTER COMMANDS ----------
@@ -156,8 +167,8 @@ client.on('interactionCreate', async (interaction) => {
 
     const { commandName } = interaction;
 
-    // ---------- /panelsetup ----------
-    if (commandName === 'panelsetup') {
+    // ---------- /panel ----------
+    if (commandName === 'panel') {
         if (!isAdmin(interaction)) {
             return interaction.reply({ content: '❌ You need Administrator permission.', ephemeral: true });
         }
@@ -165,44 +176,60 @@ client.on('interactionCreate', async (interaction) => {
         const title = interaction.options.getString('title');
         const description = interaction.options.getString('description');
 
-        // Create the Duel Panel embed like in your image
-        const embed = new EmbedBuilder()
-            .setTitle(`# ${title}`)
-            .setDescription(description || 'Use the buttons below to manage your key')
-            .setColor(0x5865F2)
-            .setFooter({ text: `${interaction.user.username} | y5` });
+        // Get the role configured for this server
+        db.get(`SELECT role_id FROM panel_roles WHERE guild_id = ?`, [interaction.guildId], async (err, roleRow) => {
+            const roleMention = roleRow ? `<@&${roleRow.role_id}>` : '@Source Access';
 
-        // Create buttons - exactly like your image
-        const row1 = new ActionRowBuilder()
-            .addComponents(
-                new ButtonBuilder()
-                    .setCustomId('view_script')
-                    .setLabel('📄 Get Script')
-                    .setStyle(ButtonStyle.Primary),
-                new ButtonBuilder()
-                    .setCustomId('redeem_key')
-                    .setLabel('🔑 Redeem Key')
-                    .setStyle(ButtonStyle.Success)
-            );
+            // Create the Source Panel embed like in your image
+            const embed = new EmbedBuilder()
+                .setTitle(`# ${title}`)
+                .setColor(0x2B2D31)
+                .setDescription(
+                    `${description}\n\n` +
+                    `**How to Redeem**\n` +
+                    `1. Click **Redeem Key**\n` +
+                    `2. Paste your key and confirm\n` +
+                    `3. Claim your ${roleMention} role\n\n` +
+                    `Need help? Create a ticket.`
+                )
+                .setFooter({ text: `${interaction.guild.name} | ${interaction.user.username}` });
 
-        const row2 = new ActionRowBuilder()
-            .addComponents(
-                new ButtonBuilder()
-                    .setCustomId('reset_hwid')
-                    .setLabel('🔄 Reset HWID')
-                    .setStyle(ButtonStyle.Danger)
-            );
+            const row = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('redeem_key')
+                        .setLabel('🔑 Redeem Key')
+                        .setStyle(ButtonStyle.Success)
+                );
 
-        const msg = await interaction.channel.send({ 
-            embeds: [embed], 
-            components: [row1, row2] 
+            const msg = await interaction.channel.send({ 
+                embeds: [embed], 
+                components: [row] 
+            });
+
+            db.run(`INSERT OR REPLACE INTO panels (guild_id, channel_id, message_id, title, description)
+                    VALUES (?, ?, ?, ?, ?)`,
+                [interaction.guildId, interaction.channelId, msg.id, title, description]);
+
+            await interaction.reply({ content: '✅ Source Panel created successfully!', ephemeral: true });
         });
+    }
 
-        db.run(`INSERT OR REPLACE INTO panels (guild_id, channel_id, message_id, title, description)
-                VALUES (?, ?, ?, ?, ?)`,
-            [interaction.guildId, interaction.channelId, msg.id, title, description]);
+    // ---------- /setpanelrole ----------
+    if (commandName === 'setpanelrole') {
+        if (!isAdmin(interaction)) {
+            return interaction.reply({ content: '❌ You need Administrator permission.', ephemeral: true });
+        }
 
-        await interaction.reply({ content: '✅ Panel created successfully!', ephemeral: true });
+        const role = interaction.options.getRole('role');
+
+        db.run(`INSERT OR REPLACE INTO panel_roles (guild_id, role_id) VALUES (?, ?)`,
+            [interaction.guildId, role.id]);
+
+        await interaction.reply({ 
+            content: `✅ Panel role set to ${role}! Users will get this role when they redeem a key.`, 
+            ephemeral: true 
+        });
     }
 
     // ---------- /hostscript ----------
@@ -218,7 +245,6 @@ client.on('interactionCreate', async (interaction) => {
                 VALUES (?, ?, ?, ?, ?)`,
             [interaction.guildId, name, script, interaction.user.id, new Date().toISOString()]);
 
-        // Create a message with the script that's tap-to-copy
         const embed = new EmbedBuilder()
             .setTitle(`📜 ${name}`)
             .setDescription('Click the button below to copy the script')
@@ -270,7 +296,6 @@ client.on('interactionCreate', async (interaction) => {
                 { name: 'Expires', value: lifetime ? 'Never (Lifetime)' : expires.toLocaleDateString(), inline: true }
             );
 
-        // Send key to user via DM
         try {
             await user.send({ embeds: [embed] });
             await interaction.reply({ content: `✅ Key sent to ${user}!`, ephemeral: true });
@@ -390,46 +415,6 @@ client.on('interactionCreate', async (interaction) => {
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
 
-    // Get Script Button
-    if (interaction.customId === 'view_script') {
-        db.get(`SELECT script_content FROM panels WHERE guild_id = ?`,
-            [interaction.guildId],
-            async (err, row) => {
-                if (row && row.script_content) {
-                    const embed = new EmbedBuilder()
-                        .setTitle('📜 Script')
-                        .setDescription(`\`\`\`lua\n${row.script_content}\n\`\`\``)
-                        .setColor(0x5865F2);
-                    await interaction.reply({ embeds: [embed], ephemeral: true });
-                } else {
-                    // Show hosted scripts instead
-                    db.all(`SELECT script_name, script_content FROM hosted_scripts WHERE guild_id = ? LIMIT 5`,
-                        [interaction.guildId],
-                        async (err, scripts) => {
-                            if (scripts && scripts.length > 0) {
-                                const embed = new EmbedBuilder()
-                                    .setTitle('📜 Available Scripts')
-                                    .setColor(0x5865F2);
-                                
-                                scripts.forEach((s, i) => {
-                                    embed.addFields({ 
-                                        name: `${i+1}. ${s.script_name}`, 
-                                        value: `\`\`\`lua\n${s.script_content.substring(0, 100)}${s.script_content.length > 100 ? '...' : ''}\n\`\`\``,
-                                        inline: false 
-                                    });
-                                });
-                                
-                                await interaction.reply({ embeds: [embed], ephemeral: true });
-                            } else {
-                                await interaction.reply({ content: '❌ No scripts available!', ephemeral: true });
-                            }
-                        }
-                    );
-                }
-            }
-        );
-    }
-
     // Redeem Key Button
     if (interaction.customId === 'redeem_key') {
         const modal = new ModalBuilder()
@@ -444,25 +429,6 @@ client.on('interactionCreate', async (interaction) => {
             .setRequired(true);
 
         const row = new ActionRowBuilder().addComponents(keyInput);
-        modal.addComponents(row);
-
-        await interaction.showModal(modal);
-    }
-
-    // Reset HWID Button
-    if (interaction.customId === 'reset_hwid') {
-        const modal = new ModalBuilder()
-            .setCustomId('reset_modal')
-            .setTitle('🔄 Reset HWID');
-
-        const hwidInput = new TextInputBuilder()
-            .setCustomId('hwid_input')
-            .setLabel('Enter your HWID')
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder('Your HWID here')
-            .setRequired(true);
-
-        const row = new ActionRowBuilder().addComponents(hwidInput);
         modal.addComponents(row);
 
         await interaction.showModal(modal);
@@ -533,7 +499,7 @@ client.on('interactionCreate', async (interaction) => {
             async (err, row) => {
                 if (row) {
                     await interaction.reply({ 
-                        content: `✅ Script copied! Use: \`${row.script_content}\``, 
+                        content: `✅ Script copied!\n\`\`\`lua\n${row.script_content}\n\`\`\``, 
                         ephemeral: true 
                     });
                 } else {
@@ -573,35 +539,27 @@ client.on('interactionCreate', async (interaction) => {
                             VALUES (?, ?, ?)`,
                         [interaction.guildId, interaction.user.id, expires.toISOString()]);
 
+                    // Give the role if configured
+                    db.get(`SELECT role_id FROM panel_roles WHERE guild_id = ?`,
+                        [interaction.guildId],
+                        async (err, roleRow) => {
+                            if (roleRow) {
+                                try {
+                                    const member = await interaction.guild.members.fetch(interaction.user.id);
+                                    await member.roles.add(roleRow.role_id);
+                                } catch (e) {
+                                    console.log('Could not add role:', e);
+                                }
+                            }
+                        }
+                    );
+
                     await interaction.reply({ 
-                        content: `✅ Key redeemed successfully! You have been whitelisted.`, 
+                        content: `✅ Key redeemed successfully! You have been whitelisted and given your role.`, 
                         ephemeral: true 
                     });
                 } else {
                     await interaction.reply({ content: '❌ Invalid or already used key!', ephemeral: true });
-                }
-            }
-        );
-    }
-
-    // Reset HWID Modal
-    if (interaction.customId === 'reset_modal') {
-        const hwid = interaction.fields.getTextInputValue('hwid_input');
-        
-        // Check if user is whitelisted
-        db.get(`SELECT * FROM whitelist WHERE guild_id = ? AND user_id = ?`,
-            [interaction.guildId, interaction.user.id],
-            async (err, row) => {
-                if (row) {
-                    await interaction.reply({ 
-                        content: `✅ HWID reset successfully!\nNew HWID: \`${hwid}\``, 
-                        ephemeral: true 
-                    });
-                } else {
-                    await interaction.reply({ 
-                        content: '❌ You are not whitelisted! Please redeem a key first.', 
-                        ephemeral: true 
-                    });
                 }
             }
         );
