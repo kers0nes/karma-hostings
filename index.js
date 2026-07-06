@@ -1,592 +1,416 @@
-import 'dotenv/config';
-import crypto from 'node:crypto';
-import express from 'express';
-import {
-  Client,
-  GatewayIntentBits,
-  MessageFlags,
-  REST,
-  Routes,
-  SlashCommandBuilder,
-} from 'discord.js';
-import { createStore } from './db.js';
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionsBitField } = require('discord.js');
+const sqlite3 = require('sqlite3').verbose();
+const crypto = require('crypto');
+require('dotenv').config();
 
-const PORT = Number(process.env.PORT || 3000);
-const MAX_SCRIPT_BYTES = Number(process.env.MAX_SCRIPT_BYTES || 256_000);
-const REQUIRE_HWID = String(process.env.REQUIRE_HWID || 'false').toLowerCase() === 'true';
-const ALLOWED_HOST_ROLE_ID = process.env.ALLOWED_HOST_ROLE_ID || '';
-const BOT_OWNER_IDS = new Set((process.env.BOT_OWNER_IDS || '').split(',').map((x) => x.trim()).filter(Boolean));
+const TOKEN = process.env.DISCORD_TOKEN;
 
-const required = ['DISCORD_TOKEN', 'CLIENT_ID'];
-for (const name of required) {
-  if (!process.env[name]) {
-    console.error(`Missing required environment variable: ${name}`);
-    process.exit(1);
-  }
+// ---------- DATABASE ----------
+const db = new sqlite3.Database('bot_data.db');
+
+db.serialize(() => {
+    db.run(`CREATE TABLE IF NOT EXISTS panels (
+        guild_id TEXT PRIMARY KEY,
+        channel_id TEXT,
+        message_id TEXT,
+        title TEXT,
+        description TEXT,
+        script_content TEXT
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS whitelist (
+        guild_id TEXT,
+        user_id TEXT,
+        expires_at TEXT,
+        PRIMARY KEY (guild_id, user_id)
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS keys (
+        key_code TEXT PRIMARY KEY,
+        guild_id TEXT,
+        created_by TEXT,
+        created_at TEXT,
+        expires_at TEXT,
+        used_by TEXT,
+        used_at TEXT,
+        status TEXT DEFAULT 'active'
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS tickets (
+        ticket_id TEXT PRIMARY KEY,
+        guild_id TEXT,
+        user_id TEXT,
+        channel_id TEXT,
+        created_at TEXT,
+        status TEXT DEFAULT 'open'
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS mutes (
+        guild_id TEXT,
+        user_id TEXT,
+        expires_at TEXT,
+        PRIMARY KEY (guild_id, user_id)
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS support_config (
+        guild_id TEXT PRIMARY KEY,
+        category_id TEXT,
+        support_role_id TEXT
+    )`);
+});
+
+// ---------- BOT ----------
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers
+    ]
+});
+
+const rest = new REST({ version: '10' }).setToken(TOKEN);
+
+// ---------- HELPERS ----------
+function isAdmin(interaction) {
+    return interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
 }
 
-const db = createStore();
-
-function publicBaseUrl() {
-  const base = process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
-  return base.replace(/\/+$/, '');
+function generateKey(length = 16) {
+    return crypto.randomBytes(length).toString('hex').toUpperCase();
 }
 
-function randomScriptId() {
-  return `scr_${crypto.randomBytes(5).toString('hex')}`;
+function getExpiry(days = null, lifetime = false) {
+    if (lifetime) return null;
+    const now = new Date();
+    if (days) now.setDate(now.getDate() + days);
+    return now.toISOString();
 }
 
-function randomLicenseKey() {
-  const hex = crypto.randomBytes(12).toString('hex').toUpperCase();
-  return `KEY-${hex.match(/.{1,4}/g).join('-')}`;
-}
-
-function escapeLuaString(value) {
-  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-}
-
-function luaError(message) {
-  return `error("${escapeLuaString(message)}")`;
-}
-
-function truncate(text, max = 1800) {
-  if (!text || text.length <= max) return text;
-  return `${text.slice(0, max - 20)}\n...truncated...`;
-}
-
-function mask(value) {
-  if (!value) return 'none';
-  if (value.length <= 10) return value;
-  return `${value.slice(0, 7)}...${value.slice(-5)}`;
-}
-
-function makeLoadstring(scriptId, { key = 'PUT_KEY_HERE', isPublic = false } = {}) {
-  const scriptUrl = `${publicBaseUrl()}/s/${encodeURIComponent(scriptId)}`;
-
-  if (isPublic) {
-    return [
-      `local url = "${escapeLuaString(scriptUrl)}"`,
-      'loadstring(http_get(url))()',
-    ].join('\n');
-  }
-
-  return [
-    `local key = "${escapeLuaString(key)}"`,
-    'local hwid = "PUT_DEVICE_ID_HERE"',
-    `local url = "${escapeLuaString(scriptUrl)}?key=" .. key .. "&hwid=" .. hwid`,
-    'loadstring(http_get(url))()',
-  ].join('\n');
-}
-
-function isExpired(license) {
-  return license.expires_at && new Date(license.expires_at).getTime() <= Date.now();
-}
-
-function hasHostPermission(interaction) {
-  if (BOT_OWNER_IDS.has(interaction.user.id)) return true;
-  if (!ALLOWED_HOST_ROLE_ID) return true;
-
-  const roles = interaction.member?.roles;
-  if (!roles) return false;
-  if (Array.isArray(roles)) return roles.includes(ALLOWED_HOST_ROLE_ID);
-  return roles.cache?.has(ALLOWED_HOST_ROLE_ID) || false;
-}
-
-async function requireHostPermission(interaction) {
-  if (hasHostPermission(interaction)) return true;
-  await interaction.reply({
-    flags: MessageFlags.Ephemeral,
-    content: `You do not have permission to host/manage scripts. Required role: \`${ALLOWED_HOST_ROLE_ID}\`.`,
-  });
-  return false;
-}
-
-async function readScriptFromInteraction(interaction) {
-  const code = interaction.options.getString('code');
-  const file = interaction.options.getAttachment('file');
-
-  if (!code && !file) {
-    throw new Error('Provide either the `code` option or a `.lua`/`.txt` file attachment.');
-  }
-
-  if (code && Buffer.byteLength(code, 'utf8') > MAX_SCRIPT_BYTES) {
-    throw new Error(`Script is too large. Max size is ${MAX_SCRIPT_BYTES} bytes.`);
-  }
-
-  if (code) return code;
-
-  if (file.size > MAX_SCRIPT_BYTES) {
-    throw new Error(`File is too large. Max size is ${MAX_SCRIPT_BYTES} bytes.`);
-  }
-
-  const allowedExtensions = ['.lua', '.txt'];
-  const lowerName = file.name.toLowerCase();
-  if (!allowedExtensions.some((extension) => lowerName.endsWith(extension))) {
-    throw new Error('Only `.lua` or `.txt` attachments are accepted.');
-  }
-
-  const response = await fetch(file.url);
-  if (!response.ok) throw new Error(`Could not download attachment: HTTP ${response.status}`);
-
-  const text = await response.text();
-  if (Buffer.byteLength(text, 'utf8') > MAX_SCRIPT_BYTES) {
-    throw new Error(`File is too large after download. Max size is ${MAX_SCRIPT_BYTES} bytes.`);
-  }
-  return text;
-}
-
-function buildCommands() {
-  return [
+// ---------- COMMANDS ----------
+const commands = [
     new SlashCommandBuilder()
-      .setName('hostscript')
-      .setDescription('Host an authorized Lua script and get a Render loadstring.')
-      .addStringOption((option) => option
-        .setName('name')
-        .setDescription('Friendly script name')
-        .setRequired(true)
-        .setMaxLength(80))
-      .addStringOption((option) => option
-        .setName('code')
-        .setDescription('Lua code for small scripts. Use file for bigger scripts.')
-        .setRequired(false)
-        .setMaxLength(4000))
-      .addAttachmentOption((option) => option
-        .setName('file')
-        .setDescription('A .lua or .txt file')
-        .setRequired(false))
-      .addBooleanOption((option) => option
-        .setName('public')
-        .setDescription('If true, no license key is required')
-        .setRequired(false)),
+        .setName('panelsetup')
+        .setDescription('Create a script panel in the current channel')
+        .addStringOption(opt => opt.setName('title').setDescription('Panel title').setRequired(true))
+        .addStringOption(opt => opt.setName('description').setDescription('Panel description').setRequired(true))
+        .addStringOption(opt => opt.setName('script').setDescription('The loadstring or script content').setRequired(true)),
 
     new SlashCommandBuilder()
-      .setName('listscripts')
-      .setDescription('List scripts you own.'),
+        .setName('generatekey')
+        .setDescription('Generate a key for a user')
+        .addUserOption(opt => opt.setName('user').setDescription('User to generate key for').setRequired(true))
+        .addIntegerOption(opt => opt.setName('days').setDescription('Days until expiry'))
+        .addBooleanOption(opt => opt.setName('lifetime').setDescription('Lifetime key (never expires)')),
 
     new SlashCommandBuilder()
-      .setName('scriptinfo')
-      .setDescription('Show info and loadstring for one of your scripts.')
-      .addStringOption((option) => option
-        .setName('script_id')
-        .setDescription('Script ID from /hostscript')
-        .setRequired(true)),
+        .setName('whitelist')
+        .setDescription('Whitelist a user')
+        .addUserOption(opt => opt.setName('user').setDescription('User to whitelist').setRequired(true))
+        .addIntegerOption(opt => opt.setName('days').setDescription('Days to whitelist').setRequired(true)),
 
     new SlashCommandBuilder()
-      .setName('deletescript')
-      .setDescription('Delete one of your hosted scripts and its keys.')
-      .addStringOption((option) => option
-        .setName('script_id')
-        .setDescription('Script ID from /hostscript')
-        .setRequired(true)),
+        .setName('resethwid')
+        .setDescription('Reset HWID for a user')
+        .addUserOption(opt => opt.setName('user').setDescription('User to reset').setRequired(true)),
 
     new SlashCommandBuilder()
-      .setName('genkey')
-      .setDescription('Generate license key(s) for one of your scripts.')
-      .addStringOption((option) => option
-        .setName('script_id')
-        .setDescription('Script ID from /hostscript')
-        .setRequired(true))
-      .addIntegerOption((option) => option
-        .setName('count')
-        .setDescription('How many keys to create, 1-25')
-        .setRequired(false)
-        .setMinValue(1)
-        .setMaxValue(25))
-      .addIntegerOption((option) => option
-        .setName('duration_days')
-        .setDescription('Days until expiry. Omit for lifetime.')
-        .setRequired(false)
-        .setMinValue(1)
-        .setMaxValue(3650))
-      .addIntegerOption((option) => option
-        .setName('max_uses')
-        .setDescription('Max successful fetches. Omit for unlimited.')
-        .setRequired(false)
-        .setMinValue(1)
-        .setMaxValue(1_000_000)),
+        .setName('setup-tickets')
+        .setDescription('Setup support ticket system')
+        .addRoleOption(opt => opt.setName('support_role').setDescription('Support role').setRequired(true)),
 
     new SlashCommandBuilder()
-      .setName('listkeys')
-      .setDescription('List recent keys for one of your scripts.')
-      .addStringOption((option) => option
-        .setName('script_id')
-        .setDescription('Script ID from /hostscript')
-        .setRequired(true)),
+        .setName('mute')
+        .setDescription('Timeout a user and delete their tickets')
+        .addUserOption(opt => opt.setName('user').setDescription('User to mute').setRequired(true))
+        .addIntegerOption(opt => opt.setName('minutes').setDescription('Minutes to mute').setRequired(true)),
+];
 
-    new SlashCommandBuilder()
-      .setName('deletekey')
-      .setDescription('Delete/revoke a license key you created.')
-      .addStringOption((option) => option
-        .setName('key')
-        .setDescription('License key')
-        .setRequired(true)),
-
-    new SlashCommandBuilder()
-      .setName('reset-hwid')
-      .setDescription('Clear the saved HWID on a license key you created.')
-      .addStringOption((option) => option
-        .setName('key')
-        .setDescription('License key')
-        .setRequired(true)),
-
-    new SlashCommandBuilder()
-      .setName('redeem')
-      .setDescription('Redeem a license key to your Discord account and get the loadstring.')
-      .addStringOption((option) => option
-        .setName('key')
-        .setDescription('License key')
-        .setRequired(true)),
-
-    new SlashCommandBuilder()
-      .setName('hosthelp')
-      .setDescription('Show bot usage help.'),
-  ].map((command) => command.toJSON());
-}
-
+// ---------- REGISTER COMMANDS ----------
 async function registerCommands() {
-  const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-  const commands = buildCommands();
-
-  if (process.env.GUILD_ID) {
-    await rest.put(Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID), { body: commands });
-    console.log(`Registered ${commands.length} guild slash commands.`);
-  } else {
-    await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
-    console.log(`Registered ${commands.length} global slash commands. Global updates can take a while to appear.`);
-  }
+    try {
+        await rest.put(Routes.applicationCommands(client.user.id), { body: commands.map(cmd => cmd.toJSON()) });
+        console.log('✅ Commands registered!');
+    } catch (err) {
+        console.error('❌ Failed to register commands:', err);
+    }
 }
 
-async function validateAccess(script, key, hwid) {
-  if (script.is_public) return { ok: true, license: null };
-
-  if (!key) return { ok: false, status: 401, reason: 'Missing license key' };
-  const license = await db.getLicenseKey(key);
-  if (!license || license.script_id !== script.id) return { ok: false, status: 403, reason: 'Invalid license key' };
-  if (!license.active) return { ok: false, status: 403, reason: 'License key is inactive' };
-  if (isExpired(license)) return { ok: false, status: 403, reason: 'License key has expired' };
-  if (license.max_uses !== null && license.max_uses !== undefined && license.uses >= license.max_uses) {
-    return { ok: false, status: 403, reason: 'License key use limit reached' };
-  }
-
-  if (REQUIRE_HWID && !hwid) return { ok: false, status: 403, reason: 'Missing HWID' };
-  if (license.hwid && hwid && license.hwid !== hwid) return { ok: false, status: 403, reason: 'HWID mismatch' };
-  if (license.hwid && REQUIRE_HWID && !hwid) return { ok: false, status: 403, reason: 'Missing HWID' };
-
-  return { ok: true, license };
-}
-
-function sendLuaError(res, status, message) {
-  res.status(status)
-    .type('text/plain; charset=utf-8')
-    .set('Cache-Control', 'no-store')
-    .send(luaError(message));
-}
-
-async function handleInteraction(interaction) {
-  if (!interaction.isChatInputCommand()) return;
-
-  try {
-    if (interaction.commandName === 'hosthelp') {
-      await interaction.reply({
-        flags: MessageFlags.Ephemeral,
-        content: [
-          '**Lua Host Bot commands**',
-          '`/hostscript name code|file public:false` - host a script and get a loadstring.',
-          '`/genkey script_id count duration_days max_uses` - create license keys.',
-          '`/redeem key` - bind a key to your Discord account and get the loadstring.',
-          '`/reset-hwid key` - clear a key HWID if a buyer changes device.',
-          '`/listscripts`, `/scriptinfo`, `/listkeys`, `/deletekey`, `/deletescript` - manage your stuff.',
-          '',
-          `Public base URL: \`${publicBaseUrl()}\``,
-          'Note: replace `http_get` in the generated Lua snippet with the HTTP GET function for your authorized Lua runtime.',
-        ].join('\n'),
-      });
-      return;
-    }
-
-    if (interaction.commandName === 'hostscript') {
-      if (!(await requireHostPermission(interaction))) return;
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-      const name = interaction.options.getString('name', true).trim();
-      const content = await readScriptFromInteraction(interaction);
-      const isPublic = interaction.options.getBoolean('public') || false;
-      const script = await db.createScript({
-        id: randomScriptId(),
-        owner_id: interaction.user.id,
-        guild_id: interaction.guildId,
-        name,
-        content,
-        is_public: isPublic,
-      });
-
-      const snippet = makeLoadstring(script.id, { isPublic: script.is_public });
-      await interaction.editReply({
-        content: truncate([
-          '✅ **Script hosted.**',
-          `Name: \`${script.name}\``,
-          `ID: \`${script.id}\``,
-          `Protected: \`${script.is_public ? 'no/public' : 'yes/key required'}\``,
-          `Raw URL: \`${publicBaseUrl()}/s/${script.id}\``,
-          '',
-          '**Loadstring:**',
-          '```lua',
-          snippet,
-          '```',
-          script.is_public ? '' : `Create keys with: \`/genkey script_id:${script.id}\``,
-        ].filter(Boolean).join('\n')),
-      });
-      return;
-    }
-
-    if (interaction.commandName === 'listscripts') {
-      const scripts = await db.listScripts(interaction.user.id);
-      if (!scripts.length) {
-        await interaction.reply({ flags: MessageFlags.Ephemeral, content: 'You do not have any hosted scripts yet. Use `/hostscript`.' });
-        return;
-      }
-      const lines = scripts.map((script) => `• \`${script.id}\` — **${script.name}** — ${script.is_public ? 'public' : 'keyed'} — ${script.content_bytes ?? '?'} bytes`);
-      await interaction.reply({ flags: MessageFlags.Ephemeral, content: truncate(lines.join('\n')) });
-      return;
-    }
-
-    if (interaction.commandName === 'scriptinfo') {
-      const scriptId = interaction.options.getString('script_id', true);
-      const script = await db.getScript(scriptId);
-      if (!script || script.owner_id !== interaction.user.id) {
-        await interaction.reply({ flags: MessageFlags.Ephemeral, content: 'Script not found, or you do not own it.' });
-        return;
-      }
-      const snippet = makeLoadstring(script.id, { isPublic: script.is_public });
-      await interaction.reply({
-        flags: MessageFlags.Ephemeral,
-        content: truncate([
-          `**${script.name}**`,
-          `ID: \`${script.id}\``,
-          `Protected: \`${script.is_public ? 'no/public' : 'yes/key required'}\``,
-          `Created: \`${script.created_at}\``,
-          `Raw URL: \`${publicBaseUrl()}/s/${script.id}\``,
-          '',
-          '```lua',
-          snippet,
-          '```',
-        ].join('\n')),
-      });
-      return;
-    }
-
-    if (interaction.commandName === 'deletescript') {
-      if (!(await requireHostPermission(interaction))) return;
-      const scriptId = interaction.options.getString('script_id', true);
-      const ok = await db.deleteScript(scriptId, interaction.user.id);
-      await interaction.reply({ flags: MessageFlags.Ephemeral, content: ok ? `Deleted \`${scriptId}\`.` : 'Script not found, or you do not own it.' });
-      return;
-    }
-
-    if (interaction.commandName === 'genkey') {
-      if (!(await requireHostPermission(interaction))) return;
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-      const scriptId = interaction.options.getString('script_id', true);
-      const script = await db.getScript(scriptId);
-      if (!script || script.owner_id !== interaction.user.id) {
-        await interaction.editReply('Script not found, or you do not own it.');
-        return;
-      }
-
-      const count = interaction.options.getInteger('count') || 1;
-      const durationDays = interaction.options.getInteger('duration_days');
-      const maxUses = interaction.options.getInteger('max_uses');
-      const expiresAt = durationDays ? new Date(Date.now() + durationDays * 86_400_000).toISOString() : null;
-
-      const created = [];
-      for (let index = 0; index < count; index += 1) {
-        created.push(await db.createLicenseKey({
-          key: randomLicenseKey(),
-          script_id: script.id,
-          owner_id: interaction.user.id,
-          expires_at: expiresAt,
-          max_uses: maxUses,
-        }));
-      }
-
-      const lines = created.map((license) => `\`${license.key}\``);
-      await interaction.editReply({
-        content: truncate([
-          `✅ Created ${created.length} key(s) for **${script.name}**.`,
-          expiresAt ? `Expires: \`${expiresAt}\`` : 'Expires: `lifetime`',
-          maxUses ? `Max uses: \`${maxUses}\`` : 'Max uses: `unlimited`',
-          '',
-          ...lines,
-          '',
-          '**Loadstring using first key:**',
-          '```lua',
-          makeLoadstring(script.id, { key: created[0].key, isPublic: false }),
-          '```',
-        ].join('\n')),
-      });
-      return;
-    }
-
-    if (interaction.commandName === 'listkeys') {
-      const scriptId = interaction.options.getString('script_id', true);
-      const script = await db.getScript(scriptId);
-      if (!script || script.owner_id !== interaction.user.id) {
-        await interaction.reply({ flags: MessageFlags.Ephemeral, content: 'Script not found, or you do not own it.' });
-        return;
-      }
-      const keys = await db.listLicenseKeys(scriptId, interaction.user.id);
-      if (!keys.length) {
-        await interaction.reply({ flags: MessageFlags.Ephemeral, content: 'No keys created for that script yet.' });
-        return;
-      }
-      const lines = keys.map((license) => {
-        const expiry = license.expires_at ? new Date(license.expires_at).toISOString().slice(0, 10) : 'lifetime';
-        const hwid = license.hwid ? mask(license.hwid) : 'unbound';
-        return `• \`${license.key}\` — uses ${license.uses}/${license.max_uses ?? '∞'} — expires ${expiry} — hwid ${hwid}`;
-      });
-      await interaction.reply({ flags: MessageFlags.Ephemeral, content: truncate(lines.join('\n')) });
-      return;
-    }
-
-    if (interaction.commandName === 'deletekey') {
-      if (!(await requireHostPermission(interaction))) return;
-      const key = interaction.options.getString('key', true);
-      const ok = await db.deleteLicenseKey(key, interaction.user.id);
-      await interaction.reply({ flags: MessageFlags.Ephemeral, content: ok ? 'Key deleted.' : 'Key not found, or you do not own it.' });
-      return;
-    }
-
-    if (interaction.commandName === 'reset-hwid') {
-      if (!(await requireHostPermission(interaction))) return;
-      const key = interaction.options.getString('key', true);
-      const license = await db.resetHwid(key, interaction.user.id);
-      await interaction.reply({ flags: MessageFlags.Ephemeral, content: license ? `HWID reset for \`${key}\`.` : 'Key not found, or you do not own it.' });
-      return;
-    }
-
-    if (interaction.commandName === 'redeem') {
-      const key = interaction.options.getString('key', true);
-      const license = await db.redeemLicenseKey(key, interaction.user.id);
-      if (!license) {
-        await interaction.reply({ flags: MessageFlags.Ephemeral, content: 'Invalid key.' });
-        return;
-      }
-      if (license.redeem_denied) {
-        await interaction.reply({ flags: MessageFlags.Ephemeral, content: 'That key has already been redeemed by another Discord account.' });
-        return;
-      }
-      if (isExpired(license)) {
-        await interaction.reply({ flags: MessageFlags.Ephemeral, content: 'That key is expired.' });
-        return;
-      }
-      const script = await db.getScript(license.script_id);
-      await interaction.reply({
-        flags: MessageFlags.Ephemeral,
-        content: truncate([
-          `✅ Redeemed key for **${script?.name || license.script_id}**.`,
-          '```lua',
-          makeLoadstring(license.script_id, { key: license.key, isPublic: false }),
-          '```',
-        ].join('\n')),
-      });
-      return;
-    }
-  } catch (error) {
-    console.error(error);
-    const content = `Error: ${error.message || 'Something went wrong.'}`;
-    if (interaction.deferred || interaction.replied) {
-      await interaction.editReply({ content: truncate(content) });
-    } else {
-      await interaction.reply({ flags: MessageFlags.Ephemeral, content: truncate(content) });
-    }
-  }
-}
-
-async function main() {
-  await db.init();
-
-  const app = express();
-  app.disable('x-powered-by');
-
-  app.use((req, res, next) => {
-    res.set('Access-Control-Allow-Origin', '*');
-    next();
-  });
-
-  app.get('/', (req, res) => {
-    res.type('text/plain').send([
-      'Lua Host Bot is running.',
-      `Base URL: ${publicBaseUrl()}`,
-      'Health: /healthz',
-      'Raw scripts: /s/:script_id',
-      'Loadstring helper: /loadstring/:script_id',
-    ].join('\n'));
-  });
-
-  app.get('/healthz', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
-
-  app.get('/loadstring/:id', async (req, res) => {
-    const script = await db.getScript(req.params.id);
-    if (!script) {
-      res.status(404).type('text/plain').send('Script not found');
-      return;
-    }
-    const key = typeof req.query.key === 'string' ? req.query.key : 'PUT_KEY_HERE';
-    res.type('text/plain; charset=utf-8').send(makeLoadstring(script.id, { key, isPublic: script.is_public }));
-  });
-
-  app.get('/s/:id', async (req, res) => {
-    const script = await db.getScript(req.params.id);
-    if (!script) {
-      sendLuaError(res, 404, 'Script not found');
-      return;
-    }
-
-    const key = typeof req.query.key === 'string' ? req.query.key.trim() : '';
-    const hwid = typeof req.query.hwid === 'string' ? req.query.hwid.trim() : '';
-    const access = await validateAccess(script, key, hwid);
-
-    if (!access.ok) {
-      sendLuaError(res, access.status, access.reason);
-      return;
-    }
-
-    if (access.license) {
-      await db.recordSuccessfulExecution(access.license.key, hwid);
-    }
-
-    res.status(200)
-      .type('text/plain; charset=utf-8')
-      .set('Cache-Control', 'no-store')
-      .send(script.content);
-  });
-
-  app.listen(PORT, () => {
-    console.log(`Web server listening on port ${PORT}`);
-  });
-
-  await registerCommands();
-
-  const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-  client.once('ready', () => {
-    console.log(`Logged in as ${client.user.tag}`);
-  });
-  client.on('interactionCreate', handleInteraction);
-  await client.login(process.env.DISCORD_TOKEN);
-}
-
-process.on('SIGINT', async () => {
-  await db.close();
-  process.exit(0);
+// ---------- EVENT: READY ----------
+client.once('ready', async () => {
+    console.log(`✅ Logged in as ${client.user.tag}`);
+    await registerCommands();
 });
 
-process.on('SIGTERM', async () => {
-  await db.close();
-  process.exit(0);
+// ---------- EVENT: INTERACTION ----------
+client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isCommand()) return;
+
+    const { commandName } = interaction;
+
+    // ---------- /panelsetup ----------
+    if (commandName === 'panelsetup') {
+        if (!isAdmin(interaction)) {
+            return interaction.reply({ content: '❌ You need Administrator permission.', ephemeral: true });
+        }
+
+        const title = interaction.options.getString('title');
+        const description = interaction.options.getString('description');
+        const script = interaction.options.getString('script');
+
+        db.run(`INSERT OR REPLACE INTO panels (guild_id, channel_id, title, description, script_content)
+                VALUES (?, ?, ?, ?, ?)`,
+            [interaction.guildId, interaction.channelId, title, description, script]);
+
+        const embed = new EmbedBuilder()
+            .setTitle(`📦 ${title}`)
+            .setDescription(description)
+            .setColor(0x5865F2)
+            .addFields({ name: '📜 Script', value: 'Click the button below to get the script!' })
+            .setFooter({ text: `Panel created by ${interaction.user.username}` });
+
+        const row = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId('get_script')
+                    .setLabel('📥 Get Script')
+                    .setStyle(ButtonStyle.Primary)
+            );
+
+        const msg = await interaction.channel.send({ embeds: [embed], components: [row] });
+        db.run(`UPDATE panels SET message_id = ? WHERE guild_id = ?`, [msg.id, interaction.guildId]);
+
+        await interaction.reply({ content: '✅ Panel created!', ephemeral: true });
+    }
+
+    // ---------- /generatekey ----------
+    if (commandName === 'generatekey') {
+        if (!isAdmin(interaction)) {
+            return interaction.reply({ content: '❌ You need Administrator permission.', ephemeral: true });
+        }
+
+        const user = interaction.options.getUser('user');
+        const days = interaction.options.getInteger('days') || 0;
+        const lifetime = interaction.options.getBoolean('lifetime') || false;
+
+        const key = generateKey();
+        const expires = getExpiry(days, lifetime);
+
+        db.run(`INSERT INTO keys (key_code, guild_id, created_by, created_at, expires_at, status)
+                VALUES (?, ?, ?, ?, ?, ?)`,
+            [key, interaction.guildId, interaction.user.id, new Date().toISOString(), expires, 'active']);
+
+        const embed = new EmbedBuilder()
+            .setTitle('🔑 Key Generated')
+            .setColor(0x00FF00)
+            .addFields(
+                { name: 'User', value: user.toString(), inline: true },
+                { name: 'Key', value: `\`${key}\``, inline: true },
+                { name: 'Expires', value: lifetime ? 'Never (Lifetime)' : expires || '30 days', inline: true }
+            );
+
+        await interaction.reply({ embeds: [embed] });
+    }
+
+    // ---------- /whitelist ----------
+    if (commandName === 'whitelist') {
+        if (!isAdmin(interaction)) {
+            return interaction.reply({ content: '❌ You need Administrator permission.', ephemeral: true });
+        }
+
+        const user = interaction.options.getUser('user');
+        const days = interaction.options.getInteger('days');
+        const expires = new Date();
+        expires.setDate(expires.getDate() + days);
+
+        db.run(`INSERT OR REPLACE INTO whitelist (guild_id, user_id, expires_at)
+                VALUES (?, ?, ?)`,
+            [interaction.guildId, user.id, expires.toISOString()]);
+
+        await interaction.reply({ content: `✅ ${user} has been whitelisted for ${days} days!` });
+    }
+
+    // ---------- /resethwid ----------
+    if (commandName === 'resethwid') {
+        if (!isAdmin(interaction)) {
+            return interaction.reply({ content: '❌ You need Administrator permission.', ephemeral: true });
+        }
+
+        const user = interaction.options.getUser('user');
+        await interaction.reply({ content: `✅ HWID reset for ${user}!` });
+    }
+
+    // ---------- /setup-tickets ----------
+    if (commandName === 'setup-tickets') {
+        if (!isAdmin(interaction)) {
+            return interaction.reply({ content: '❌ You need Administrator permission.', ephemeral: true });
+        }
+
+        const supportRole = interaction.options.getRole('support_role');
+
+        const category = await interaction.guild.channels.create({
+            name: '🎫 Tickets',
+            type: 4 // Category
+        });
+
+        db.run(`INSERT OR REPLACE INTO support_config (guild_id, category_id, support_role_id)
+                VALUES (?, ?, ?)`,
+            [interaction.guildId, category.id, supportRole.id]);
+
+        const channel = await interaction.guild.channels.create({
+            name: 'create-ticket',
+            type: 0, // Text channel
+            parent: category.id
+        });
+
+        const embed = new EmbedBuilder()
+            .setTitle('🎫 Support Tickets')
+            .setDescription('Click the button below to create a support ticket!')
+            .setColor(0x5865F2);
+
+        const row = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId('create_ticket')
+                    .setLabel('🎫 Create Ticket')
+                    .setStyle(ButtonStyle.Success)
+            );
+
+        await channel.send({ embeds: [embed], components: [row] });
+        await interaction.reply({ content: `✅ Ticket system setup complete!`, ephemeral: true });
+    }
+
+    // ---------- /mute ----------
+    if (commandName === 'mute') {
+        if (!isAdmin(interaction)) {
+            return interaction.reply({ content: '❌ You need Administrator permission.', ephemeral: true });
+        }
+
+        const user = interaction.options.getUser('user');
+        const minutes = interaction.options.getInteger('minutes');
+        const member = interaction.guild.members.cache.get(user.id);
+
+        if (!member) {
+            return interaction.reply({ content: '❌ User not found!', ephemeral: true });
+        }
+
+        // Timeout user
+        const duration = minutes * 60 * 1000;
+        await member.timeout(duration, `Muted by ${interaction.user.tag}`);
+
+        // Delete their tickets
+        db.all(`SELECT channel_id FROM tickets WHERE guild_id = ? AND user_id = ? AND status = 'open'`,
+            [interaction.guildId, user.id],
+            async (err, rows) => {
+                if (rows) {
+                    for (const row of rows) {
+                        const channel = interaction.guild.channels.cache.get(row.channel_id);
+                        if (channel) await channel.delete();
+                    }
+                    db.run(`UPDATE tickets SET status = 'closed' WHERE guild_id = ? AND user_id = ?`,
+                        [interaction.guildId, user.id]);
+                }
+            }
+        );
+
+        // Log mute
+        db.run(`INSERT OR REPLACE INTO mutes (guild_id, user_id, expires_at)
+                VALUES (?, ?, ?)`,
+            [interaction.guildId, user.id, new Date(Date.now() + duration).toISOString()]);
+
+        await interaction.reply({ content: `✅ ${user} has been muted for ${minutes} minutes and their tickets deleted!` });
+    }
 });
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
+// ---------- BUTTON HANDLERS ----------
+client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isButton()) return;
+
+    // Get Script Button
+    if (interaction.customId === 'get_script') {
+        db.get(`SELECT script_content FROM panels WHERE guild_id = ?`,
+            [interaction.guildId],
+            async (err, row) => {
+                if (row) {
+                    const embed = new EmbedBuilder()
+                        .setTitle('📜 Script')
+                        .setDescription(`\`\`\`lua\n${row.script_content}\n\`\`\``)
+                        .setColor(0x5865F2);
+                    await interaction.reply({ embeds: [embed], ephemeral: true });
+                } else {
+                    await interaction.reply({ content: '❌ No script found!', ephemeral: true });
+                }
+            }
+        );
+    }
+
+    // Create Ticket Button
+    if (interaction.customId === 'create_ticket') {
+        db.get(`SELECT category_id, support_role_id FROM support_config WHERE guild_id = ?`,
+            [interaction.guildId],
+            async (err, config) => {
+                if (!config) {
+                    return interaction.reply({ content: '❌ Ticket system not configured!', ephemeral: true });
+                }
+
+                const ticketId = 'ticket-' + Date.now().toString(36);
+                const category = interaction.guild.channels.cache.get(config.category_id);
+
+                const channel = await interaction.guild.channels.create({
+                    name: ticketId,
+                    type: 0,
+                    parent: category ? category.id : null,
+                    permissionOverwrites: [
+                        {
+                            id: interaction.guild.id,
+                            deny: [PermissionsBitField.Flags.ViewChannel]
+                        },
+                        {
+                            id: interaction.user.id,
+                            allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
+                        },
+                        {
+                            id: config.support_role_id,
+                            allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
+                        }
+                    ]
+                });
+
+                db.run(`INSERT INTO tickets (ticket_id, guild_id, user_id, channel_id, created_at)
+                        VALUES (?, ?, ?, ?, ?)`,
+                    [ticketId, interaction.guildId, interaction.user.id, channel.id, new Date().toISOString()]);
+
+                const embed = new EmbedBuilder()
+                    .setTitle('🎫 Ticket Created')
+                    .setDescription(`Support will be with you shortly.`)
+                    .setColor(0x5865F2)
+                    .addFields(
+                        { name: 'Created by', value: interaction.user.toString() },
+                        { name: 'Ticket ID', value: ticketId }
+                    );
+
+                const row = new ActionRowBuilder()
+                    .addComponents(
+                        new ButtonBuilder()
+                            .setCustomId('close_ticket')
+                            .setLabel('🔒 Close Ticket')
+                            .setStyle(ButtonStyle.Danger)
+                    );
+
+                await channel.send({ embeds: [embed], components: [row] });
+                await interaction.reply({ content: `✅ Ticket created: ${channel}`, ephemeral: true });
+            }
+        );
+    }
+
+    // Close Ticket Button
+    if (interaction.customId === 'close_ticket') {
+        await interaction.reply({ content: '🔒 Closing ticket...', ephemeral: true });
+        setTimeout(async () => {
+            await interaction.channel.delete();
+        }, 2000);
+    }
 });
+
+// ---------- START ----------
+client.login(TOKEN);
