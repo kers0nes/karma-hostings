@@ -1,231 +1,137 @@
-import asyncio
-import os
-import secrets
-import sqlite3
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+const Database = require('better-sqlite3');
+const crypto = require('crypto');
 
-import aiohttp
-from aiohttp import web
-import discord
-from discord import app_commands
-from discord.ext import commands
-from dotenv import load_dotenv
+const dbPath = process.env.DATABASE_PATH || './data.sqlite';
+const db = new Database(dbPath);
+db.pragma('journal_mode = WAL');
 
-load_dotenv()
+db.exec(`
+CREATE TABLE IF NOT EXISTS guild_settings (
+  guild_id TEXT PRIMARY KEY,
+  admin_role_id TEXT,
+  customer_role_id TEXT,
+  log_channel_id TEXT,
+  panel_channel_id TEXT,
+  panel_message_id TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
-TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
-GUILD_ID = os.getenv("DISCORD_GUILD_ID", "").strip()
-API_HOST = os.getenv("API_HOST", "0.0.0.0")
-API_PORT = int(os.getenv("API_PORT", "8080"))
-DB_PATH = os.getenv("DATABASE_PATH", "polsec_like.sqlite3")
+CREATE TABLE IF NOT EXISTS scripts (
+  id TEXT PRIMARY KEY,
+  guild_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  api_secret_hash TEXT NOT NULL,
+  api_secret_preview TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
-UTC = timezone.utc
+CREATE TABLE IF NOT EXISTS licenses (
+  license_key TEXT PRIMARY KEY,
+  script_id TEXT NOT NULL,
+  guild_id TEXT NOT NULL,
+  discord_user_id TEXT,
+  hwid TEXT,
+  expires_at TEXT,
+  revoked INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  redeemed_at TEXT,
+  FOREIGN KEY(script_id) REFERENCES scripts(id)
+);
 
+CREATE INDEX IF NOT EXISTS idx_scripts_guild ON scripts(guild_id);
+CREATE INDEX IF NOT EXISTS idx_licenses_script ON licenses(script_id);
+CREATE INDEX IF NOT EXISTS idx_licenses_user ON licenses(discord_user_id);
+`);
 
-def now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+function hashSecret(secret) {
+  return crypto.createHash('sha256').update(secret).digest('hex');
+}
 
+function makeKey(prefix = 'KEY') {
+  const raw = crypto.randomBytes(18).toString('base64url').toUpperCase();
+  return `${prefix}-${raw.match(/.{1,6}/g).join('-')}`;
+}
 
-def parse_iso(value: Optional[str]) -> Optional[datetime]:
-    if not value:
-        return None
-    return datetime.fromisoformat(value)
+function makeId(prefix = 'scr') {
+  return `${prefix}_${crypto.randomBytes(6).toString('hex')}`;
+}
 
+function addDays(days) {
+  if (!days || days <= 0) return null;
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString();
+}
 
-def make_id(prefix: str) -> str:
-    return f"{prefix}_{secrets.token_urlsafe(8)}".replace("-", "").replace("_", "_")
+function isExpired(expiresAt) {
+  return Boolean(expiresAt && new Date(expiresAt).getTime() < Date.now());
+}
 
+function getSettings(guildId) {
+  return db.prepare('SELECT * FROM guild_settings WHERE guild_id = ?').get(guildId);
+}
 
-def make_key() -> str:
-    return "PLS-" + secrets.token_urlsafe(18).replace("-", "").replace("_", "").upper()[:24]
+function upsertSettings(guildId, patch) {
+  const current = getSettings(guildId) || {};
+  const next = { ...current, ...patch };
 
+  db.prepare(`
+    INSERT INTO guild_settings (guild_id, admin_role_id, customer_role_id, log_channel_id, panel_channel_id, panel_message_id, updated_at)
+    VALUES (@guild_id, @admin_role_id, @customer_role_id, @log_channel_id, @panel_channel_id, @panel_message_id, CURRENT_TIMESTAMP)
+    ON CONFLICT(guild_id) DO UPDATE SET
+      admin_role_id=excluded.admin_role_id,
+      customer_role_id=excluded.customer_role_id,
+      log_channel_id=excluded.log_channel_id,
+      panel_channel_id=excluded.panel_channel_id,
+      panel_message_id=excluded.panel_message_id,
+      updated_at=CURRENT_TIMESTAMP
+  `).run({
+    guild_id: guildId,
+    admin_role_id: next.admin_role_id || null,
+    customer_role_id: next.customer_role_id || null,
+    log_channel_id: next.log_channel_id || null,
+    panel_channel_id: next.panel_channel_id || null,
+    panel_message_id: next.panel_message_id || null
+  });
+}
 
-class Store:
-    def __init__(self, path: str):
-        self.path = path
-        self.conn = sqlite3.connect(path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        self.lock = asyncio.Lock()
-        self.init_db()
+function createScript({ guildId, name, createdBy }) {
+  const id = makeId('script');
+  const apiSecret = `ps_${crypto.randomBytes(32).toString('base64url')}`;
 
-    def init_db(self):
-        self.conn.executescript(
-            """
-            PRAGMA journal_mode=WAL;
+  db.prepare(`
+    INSERT INTO scripts (id, guild_id, name, api_secret_hash, api_secret_preview, created_by)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    guildId,
+    name,
+    hashSecret(apiSecret),
+    `${apiSecret.slice(0, 8)}...${apiSecret.slice(-6)}`,
+    createdBy
+  );
 
-            CREATE TABLE IF NOT EXISTS guild_settings (
-                guild_id TEXT PRIMARY KEY,
-                admin_role_id TEXT,
-                customer_role_id TEXT,
-                log_channel_id TEXT,
-                updated_at TEXT NOT NULL
-            );
+  return { id, name, apiSecret };
+}
 
-            CREATE TABLE IF NOT EXISTS scripts (
-                id TEXT PRIMARY KEY,
-                guild_id TEXT NOT NULL,
-                name TEXT NOT NULL,
-                api_secret TEXT NOT NULL,
-                owner_user_id TEXT NOT NULL,
-                webhook_url TEXT,
-                created_at TEXT NOT NULL
-            );
+function verifyAdmin(member, settings) {
+  if (!member) return false;
+  if (member.permissions.has('Administrator')) return true;
+  return Boolean(settings && settings.admin_role_id && member.roles.cache.has(settings.admin_role_id));
+}
 
-            CREATE TABLE IF NOT EXISTS license_keys (
-                code TEXT PRIMARY KEY,
-                script_id TEXT NOT NULL,
-                guild_id TEXT NOT NULL,
-                duration_days INTEGER NOT NULL DEFAULT 30,
-                max_uses INTEGER NOT NULL DEFAULT 1,
-                uses INTEGER NOT NULL DEFAULT 0,
-                status TEXT NOT NULL DEFAULT 'active',
-                created_by TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                redeemed_by TEXT,
-                redeemed_at TEXT,
-                expires_at TEXT,
-                hwid TEXT,
-                revoked_reason TEXT,
-                FOREIGN KEY(script_id) REFERENCES scripts(id)
-            );
-
-            CREATE TABLE IF NOT EXISTS audit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                guild_id TEXT NOT NULL,
-                actor_user_id TEXT NOT NULL,
-                action TEXT NOT NULL,
-                details TEXT,
-                created_at TEXT NOT NULL
-            );
-            """
-        )
-        self.conn.commit()
-
-    async def execute(self, query: str, params=()):
-        async with self.lock:
-            cur = self.conn.execute(query, params)
-            self.conn.commit()
-            return cur
-
-    async def fetchone(self, query: str, params=()):
-        async with self.lock:
-            cur = self.conn.execute(query, params)
-            return cur.fetchone()
-
-    async def fetchall(self, query: str, params=()):
-        async with self.lock:
-            cur = self.conn.execute(query, params)
-            return cur.fetchall()
-
-
-store = Store(DB_PATH)
-
-intents = discord.Intents.default()
-intents.guilds = True
-intents.members = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-
-async def get_settings(guild_id: int):
-    return await store.fetchone("SELECT * FROM guild_settings WHERE guild_id = ?", (str(guild_id),))
-
-
-async def is_staff(interaction: discord.Interaction) -> bool:
-    if not interaction.guild or not isinstance(interaction.user, discord.Member):
-        return False
-    if interaction.user.guild_permissions.manage_guild or interaction.user.guild_permissions.administrator:
-        return True
-    settings = await get_settings(interaction.guild.id)
-    if settings and settings["admin_role_id"]:
-        return any(str(role.id) == settings["admin_role_id"] for role in interaction.user.roles)
-    return False
-
-
-async def audit(guild_id: int, actor_id: int, action: str, details: str = ""):
-    await store.execute(
-        "INSERT INTO audit_log (guild_id, actor_user_id, action, details, created_at) VALUES (?, ?, ?, ?, ?)",
-        (str(guild_id), str(actor_id), action, details[:1500], now_iso()),
-    )
-    settings = await get_settings(guild_id)
-    if settings and settings["log_channel_id"]:
-        channel = bot.get_channel(int(settings["log_channel_id"]))
-        if isinstance(channel, discord.TextChannel):
-            try:
-                await channel.send(f"**{action}** by <@{actor_id}>\n{details[:1800]}")
-            except discord.DiscordException:
-                pass
-
-
-async def require_staff(interaction: discord.Interaction) -> bool:
-    if await is_staff(interaction):
-        return True
-    await interaction.response.send_message("You need Manage Server or the configured admin role to use this.", ephemeral=True)
-    return False
-
-
-@bot.event
-async def on_ready():
-    if GUILD_ID:
-        guild = discord.Object(id=int(GUILD_ID))
-        bot.tree.copy_global_to(guild=guild)
-        synced = await bot.tree.sync(guild=guild)
-        print(f"Synced {len(synced)} commands to guild {GUILD_ID}")
-    else:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} global commands")
-    print(f"Logged in as {bot.user} ({bot.user.id})")
-
-
-@bot.tree.command(description="Configure roles and logging for the licensing bot.")
-@app_commands.describe(admin_role="Role allowed to manage scripts/keys", customer_role="Role assigned after redeem", log_channel="Channel for audit logs")
-async def setup(
-    interaction: discord.Interaction,
-    admin_role: Optional[discord.Role] = None,
-    customer_role: Optional[discord.Role] = None,
-    log_channel: Optional[discord.TextChannel] = None,
-):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member):
-        await interaction.response.send_message("Run this in a server.", ephemeral=True)
-        return
-    if not interaction.user.guild_permissions.manage_guild and not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("You need Manage Server to run setup.", ephemeral=True)
-        return
-
-    await store.execute(
-        """
-        INSERT INTO guild_settings (guild_id, admin_role_id, customer_role_id, log_channel_id, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(guild_id) DO UPDATE SET
-            admin_role_id=excluded.admin_role_id,
-            customer_role_id=excluded.customer_role_id,
-            log_channel_id=excluded.log_channel_id,
-            updated_at=excluded.updated_at
-        """,
-        (
-            str(interaction.guild.id),
-            str(admin_role.id) if admin_role else None,
-            str(customer_role.id) if customer_role else None,
-            str(log_channel.id) if log_channel else None,
-            now_iso(),
-        ),
-    )
-    await audit(interaction.guild.id, interaction.user.id, "setup", "Updated guild settings")
-    await interaction.response.send_message("Setup saved.", ephemeral=True)
-
-
-@bot.tree.command(description="Create a script/product to license.")
-@app_commands.describe(name="Script/product name", webhook_url="Optional webhook URL for your own notifications")
-async def createscript(interaction: discord.Interaction, name: str, webhook_url: Optional[str] = None):
-    if not interaction.guild:
-        await interaction.response.send_message("Run this in a server.", ephemeral=True)
-        return
-    if not await require_staff(interaction):
-        return
-    script_id = make_id("scr")
-    api_secret = secrets.token_urlsafe(32)
-    await store.execute(
-        "INSERT INTO scripts (id, guild_id, name, api_secret, owner_user_id, webhook_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (script_id, str(interaction.guild.id), name[:100], api_secret, str(interaction.user.id), webhook_url, now_iso()),
-    )
-    await audit(interaction.guild.id, interaction.user.id, "createscript", f"Created
+module.exports = {
+  db,
+  hashSecret,
+  makeKey,
+  makeId,
+  addDays,
+  isExpired,
+  getSettings,
+  upsertSettings,
+  createScript,
+  verifyAdmin
+};
