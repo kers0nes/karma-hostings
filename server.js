@@ -1513,19 +1513,80 @@ function startApiServer() {
   app.use(express.json({ limit: '64kb' }));
   app.use(express.urlencoded({ extended: true, limit: '256kb' }));
 
-  app.get('/', (req, res) => res.json({ 
-    name: 'Karma Protection API',
-    version: '1.0.0',
-    endpoints: {
-      health: '/health',
-      stats: '/api/stats',
-      obfuscate: '/api/obfuscate',
-      verify: '/api/verify',
-      hosted: '/hosted',
-      loadstring: '/loadstring/:id',
-      script: '/script/:id.lua'
-    }
-  }));
+  // ============================================================
+  // INDEX PAGE - The main website landing page
+  // ============================================================
+  app.get('/', (req, res) => {
+    const scriptCount = db.prepare('SELECT COUNT(*) AS count FROM scripts').get().count;
+    const keyCount = db.prepare('SELECT COUNT(*) AS count FROM licenses').get().count;
+    const hostedCount = db.prepare('SELECT COUNT(*) AS count FROM hosted_scripts').get().count;
+    const userCount = db.prepare('SELECT COUNT(*) AS count FROM website_users').get().count;
+
+    res.type('html').send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Karma Protection — Lua Code Protection & Licensing</title>
+  <meta name="description" content="Karma Protection protects Lua code with obfuscation, HWID-locked keys, hosted loadstrings, and a Discord synced panel." />
+  <style>
+    :root{--bg:#030303;--card:#0b0b0c;--muted:#a1a1aa;--line:#242428;--text:#f8fafc;--primary:#ffffff;--soft:#151518}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 50% -8%,rgba(255,255,255,.16),transparent 30%),#030303;color:var(--text);font-family:"SF Pro Display","Aptos","Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.01em;min-height:100vh}
+    .grid{position:fixed;inset:0;background-image:linear-gradient(rgba(255,255,255,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.055) 1px,transparent 1px);background-size:64px 64px;mask-image:linear-gradient(to bottom,#000,transparent 82%);pointer-events:none}
+    a{color:inherit;text-decoration:none}.container{width:min(1180px,92%);margin:auto}
+    header{position:sticky;top:0;z-index:40;border-bottom:1px solid rgba(255,255,255,.12);background:rgba(3,3,3,.82);backdrop-filter:blur(18px)}
+    .nav{height:64px;display:flex;align-items:center;justify-content:space-between}
+    .brand{display:flex;align-items:center;gap:10px;font-weight:780}
+    .beta{font:10px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;border:1px solid #2d2d32;border-radius:5px;padding:2px 6px;color:#b6b6bd}
+    .btn{display:inline-flex;align-items:center;gap:10px;border-radius:10px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.055);padding:13px 18px;font:800 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;color:#fff;cursor:pointer}
+    .btn.primary{background:#fff;color:#050505;border-color:#fff;box-shadow:0 0 40px rgba(255,255,255,.14)}
+    .btn.dark{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32)}
+    .hero{position:relative;text-align:center;padding:80px 0 60px}
+    .pill{display:inline-flex;gap:10px;align-items:center;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.045);border-radius:999px;padding:8px 13px;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#d4d4d8}
+    .pulse{width:7px;height:7px;border-radius:50%;background:#fff;box-shadow:0 0 18px #fff}
+    .hero h1{font-size:clamp(40px,7vw,80px);line-height:1.02;letter-spacing:-.075em;margin:26px auto 18px;max-width:900px}
+    .glow{text-shadow:0 0 32px rgba(255,255,255,.34)}
+    .hero p{max-width:680px;margin:0 auto;color:#a1a1aa;font:500 15px/1.8 ui-monospace,monospace}
+    .actions{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin-top:34px}
+    .section{border-top:1px solid rgba(255,255,255,.10);padding:60px 0}
+    .sectionHead{max-width:720px;margin-bottom:34px}
+    .kicker{font:800 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#fff;margin-bottom:10px}
+    .section h2{font-size:clamp(30px,4vw,48px);line-height:1.02;letter-spacing:-.055em;margin:0}
+    .muted{color:#a1a1aa}
+    .features{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+    .card{border:1px solid rgba(255,255,255,.13);border-radius:24px;background:rgba(15,15,16,.72);padding:24px;transition:.2s ease}
+    .card:hover{border-color:rgba(255,255,255,.35);transform:translateY(-2px)}
+    .icon{width:38px;height:38px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.18);border-radius:12px;margin-bottom:16px;font-size:18px}
+    .card h3{margin:0 0 8px;font-size:18px}
+    .card p{margin:0;color:#a1a1aa;font:500 12px/1.7 ui-monospace,monospace}
+    .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:20px}
+    .stat{border:1px solid rgba(255,255,255,.13);border-radius:18px;background:rgba(15,15,16,.65);padding:22px;display:flex;gap:15px;align-items:center}
+    .num{font-size:34px;font-weight:850}
+    .pricing{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid rgba(255,255,255,.13);border-radius:28px;overflow:hidden;background:rgba(15,15,16,.45)}
+    .plan{padding:32px}
+    .plan+.plan{border-left:1px solid rgba(255,255,255,.13);background:rgba(255,255,255,.035)}
+    .price{font-size:58px;font-weight:900;letter-spacing:-.06em}
+    .plan ul{list-style:none;padding:0;margin:22px 0;display:grid;gap:13px}
+    .plan li:before{content:'✓';margin-right:10px}
+    .cta{text-align:center;max-width:760px;margin:auto}
+    .footer{border-top:1px solid rgba(255,255,255,.10);padding:34px 0;color:#777;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+    @media(max-width:850px){.features,.pricing{grid-template-columns:1fr}.plan+.plan{border-left:0;border-top:1px solid rgba(255,255,255,.13)}.hero{text-align:left}.actions{justify-content:flex-start}}
+  </style>
+</head>
+<body>
+  <div class="grid"></div>
+  <header><div class="container nav"><a class="brand" href="/"><span style="font-weight:900">Karma</span><span class="beta">Protection</span></a><div style="display:flex;gap:12px"><a class="btn dark" href="/login">Sign In</a><a class="btn primary" href="${DISCORD_INVITE_URL}">Discord</a></div></div></header>
+  <main>
+    <section class="hero"><div class="container"><a class="pill" href="#features"><span class="pulse"></span>The standard for Lua security</a><h1>Protect. <span class="glow">Monetize.</span> Earn.</h1><p>Drop your project, get a secure build, and monetize with confidence. HWID-lock, whitelist keys, obfuscate, and ship straight from Discord.</p><div class="actions"><a class="btn primary" href="/login">Enter the lab</a><a class="btn dark" href="/dashboard?tab=obfuscate">Obfuscator</a><a class="btn dark" href="#features">Explore</a></div></div></section>
+    <section id="features" class="section"><div class="container"><div class="sectionHead"><div class="kicker">Karma Protection</div><h2>Everything you need to ship and protect.</h2></div><div class="features"><div class="card"><div class="icon">⚙️</div><h3>Custom Obfuscator</h3><p>Multi-layer local protection with anti-tamper checks, encoded payloads, and protected loadstrings.</p></div><div class="card"><div class="icon">🔑</div><h3>Whitelist System</h3><p>Hand out keys, let clients redeem, revoke, extend, and reset HWID access.</p></div><div class="card"><div class="icon">🤖</div><h3>Discord Bot</h3><p>Panels, script hosting, key generation, HWID bans, and API linking from Discord.</p></div><div class="card"><div class="icon">📊</div><h3>Dashboard</h3><p>Scripts, protected builds, upload files, users, owner tools, and live status in one place.</p></div><div class="card"><div class="icon">🆔</div><h3>HWID Tracker</h3><p>Lock each key to a single device on first run. Reset or ban HWIDs anytime.</p></div><div class="card"><div class="icon">📦</div><h3>Protected Loadstrings</h3><p>Served through a protected loader route with KEYLESS support for easy execution.</p></div></div></div></section>
+    <section class="section"><div class="container"><div class="stats"><div class="stat"><div class="num">${userCount}</div><div><b>creators onboarded</b><br><span class="muted">signed in users</span></div></div><div class="stat"><div class="num">${hostedCount}</div><div><b>scripts protected</b><br><span class="muted">hosted builds</span></div></div><div class="stat"><div class="num">${keyCount}</div><div><b>keys issued</b><br><span class="muted">license keys</span></div></div></div></div></section>
+    <section id="pricing" class="section"><div class="container"><div class="sectionHead" style="text-align:center;margin-inline:auto"><div class="kicker">pricing</div><h2>Simple plans. Real protection.</h2></div><div class="pricing"><div class="plan"><div class="kicker">Citizen</div><div class="price">$0</div><p class="muted">forever</p><ul><li>Discord bot + panel deploy</li><li>Whitelist keys</li><li>Standard obfuscation</li><li>5 scripts by default</li></ul><a class="btn dark" href="/login">Get Started Free</a></div><div class="plan"><div class="kicker">Royal</div><div class="price">$3</div><p class="muted">month</p><ul><li>Higher script limits</li><li>Maximum obfuscation</li><li>Priority builds</li><li>Owner controlled upgrades</li></ul><a class="btn primary" href="/login">Upgrade</a></div></div></div></section>
+    <section class="section"><div class="container cta"><h2>Ready to take back control?</h2><p class="muted">Sign in with Discord, upload your first script, and ship in minutes.</p><div class="actions"><a class="btn primary" href="/login">Sign in with Discord</a><a class="btn dark" href="${DISCORD_INVITE_URL}">Join the Discord</a></div></div></section>
+  </main>
+  <footer class="container footer"><span>© Karma Protection</span><span>Protect, Monetize, Earn</span></footer>
+</body>
+</html>`);
+  });
 
   app.get('/health', (req, res) => res.json({ ok: true, name: 'Karma Protection' }));
 
@@ -1634,6 +1695,82 @@ function startApiServer() {
     });
   });
 
+  app.get('/login', (req, res) => {
+    const state = crypto.randomBytes(18).toString('hex');
+    oauthStates.set(state, Date.now());
+    for (const [oldState, createdAt] of oauthStates) {
+      if (Date.now() - createdAt > 10 * 60 * 1000) oauthStates.delete(oldState);
+    }
+
+    const redirectUri = `${publicBaseUrl()}/auth/discord/callback`;
+    const params = new URLSearchParams({
+      client_id: OAUTH_CLIENT_ID,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: 'identify guilds',
+      state
+    });
+
+    return res.redirect(`https://discord.com/oauth2/authorize?${params.toString()}`);
+  });
+
+  app.get('/auth/discord/callback', async (req, res) => {
+    try {
+      const { code, state } = req.query;
+      if (!code || !state || !oauthStates.has(state)) {
+        return res.status(400).type('html').send('<h1>Invalid OAuth state</h1><p>Please go back and try signing in again.</p>');
+      }
+      oauthStates.delete(state);
+
+      if (!DISCORD_CLIENT_SECRET) {
+        return res.status(500).type('html').send('<h1>OAuth not configured</h1><p>Add DISCORD_CLIENT_SECRET in Render environment variables, then redeploy.</p>');
+      }
+
+      const redirectUri = `${publicBaseUrl()}/auth/discord/callback`;
+      const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: OAUTH_CLIENT_ID,
+          client_secret: DISCORD_CLIENT_SECRET,
+          grant_type: 'authorization_code',
+          code: String(code),
+          redirect_uri: redirectUri
+        })
+      });
+
+      const tokenData = await tokenResponse.json().catch(() => ({}));
+      if (!tokenResponse.ok) {
+        return res.status(500).type('html').send(`<h1>Discord OAuth failed</h1><pre>${escapeHtml(JSON.stringify(tokenData, null, 2))}</pre>`);
+      }
+
+      const userResponse = await fetch('https://discord.com/api/users/@me', {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` }
+      });
+      const user = await userResponse.json();
+      if (!userResponse.ok) {
+        return res.status(500).type('html').send('<h1>Could not fetch Discord user</h1>');
+      }
+
+      db.prepare(`
+        INSERT INTO website_users (id, username, global_name, avatar, last_login)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+          username=excluded.username,
+          global_name=excluded.global_name,
+          avatar=excluded.avatar,
+          last_login=CURRENT_TIMESTAMP
+      `).run(user.id, user.username || null, user.global_name || null, user.avatar || null);
+
+      const secure = publicBaseUrl().startsWith('https://') ? '; Secure' : '';
+      res.setHeader('Set-Cookie', `kolsec_session=${encodeURIComponent(makeSession(user))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800${secure}`);
+      return res.redirect('/dashboard');
+    } catch (error) {
+      console.error('OAuth callback error:', error);
+      return res.status(500).type('html').send(`<h1>OAuth error</h1><pre>${escapeHtml(error.message)}</pre>`);
+    }
+  });
+
   app.use((err, req, res, next) => {
     console.error('API error:', err);
     if (res.headersSent) return next(err);
@@ -1642,6 +1779,28 @@ function startApiServer() {
 
   const port = Number(process.env.PORT || process.env.API_PORT || 3000);
   app.listen(port, '0.0.0.0', () => console.log(`Web server listening on port ${port}`));
+}
+
+function makeSession(user) {
+  const payload = {
+    id: user.id,
+    username: user.username,
+    global_name: user.global_name,
+    avatar: user.avatar,
+    exp: Date.now() + 7 * 24 * 60 * 60 * 1000
+  };
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(body).digest('base64url');
+  return `${body}.${sig}`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
 }
 
 (async () => {
