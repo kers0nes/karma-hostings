@@ -53,20 +53,19 @@ if (!DISCORD_TOKEN) {
 const commands = [
   new SlashCommandBuilder()
     .setName('help')
-    .setDescription('Show Kolsec command list'),
+    .setDescription('Show Karma command list'),
 
   new SlashCommandBuilder()
     .setName('status')
-    .setDescription('Show Kolsec service/database status'),
+    .setDescription('Show Karma service/database status'),
 
   new SlashCommandBuilder()
     .setName('panel')
-    .setDescription('Post/configure the Kolsec button panel')
+    .setDescription('Post/configure the Karma button panel')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addStringOption(o => o.setName('title').setDescription('Panel title, example: Drizzy Hub').setRequired(true).setMaxLength(100))
     .addStringOption(o => o.setName('description').setDescription('Panel description').setRequired(true).setMaxLength(500))
-    .addChannelOption(o => o.setName('channel').setDescription('Where to post the panel').addChannelTypes(ChannelType.GuildText).setRequired(false))
-    .addRoleOption(o => o.setName('admin_role').setDescription('Role allowed to manage Kolsec').setRequired(false))
+    .addRoleOption(o => o.setName('admin_role').setDescription('Role allowed to manage Karma').setRequired(false))
     .addRoleOption(o => o.setName('customer_role').setDescription('Buyer role given after redeeming').setRequired(false))
     .addChannelOption(o => o.setName('log_channel').setDescription('Logs channel').addChannelTypes(ChannelType.GuildText).setRequired(false)),
 
@@ -396,14 +395,15 @@ const processedInteractions = new Set();
 
 function panelEmbed(guildId) {
   const settings = guildId ? getSettings(guildId) : null;
-  const title = settings?.panel_title || 'Kolsec Hub';
+  const title = settings?.panel_title || 'Karma Hub';
   const description = settings?.panel_description || 'Use the buttons below to manage your key';
 
   return new EmbedBuilder()
     .setTitle(title)
     .setDescription(description)
-    .setColor(0x2f3136)
-    .setFooter({ text: 'Kolsec | v1' });
+    .setColor(0xe3b944)
+    .setThumbnail(`${publicBaseUrl()}/assets/karma-logo.png`)
+    .setFooter({ text: 'Karma Sources | v.beta', iconURL: `${publicBaseUrl()}/assets/karma-logo.png` });
 }
 
 function panelButtons() {
@@ -493,7 +493,7 @@ async function handleCommand(interaction) {
     return interaction.reply({
       ephemeral: true,
       content: [
-        '**Kolsec Commands**',
+        '**Karma Commands**',
         '`/panel title description` - configure/post the button panel',
         '`/apply` - create a script, host it, and get a loadstring',
         '`/createscript` - create a script/API secret only',
@@ -521,7 +521,7 @@ async function handleCommand(interaction) {
     const scriptCount = db.prepare('SELECT COUNT(*) AS count FROM scripts WHERE guild_id = ?').get(interaction.guildId).count;
     const keyCount = db.prepare('SELECT COUNT(*) AS count FROM licenses WHERE guild_id = ?').get(interaction.guildId).count;
     const hostedCount = db.prepare('SELECT COUNT(*) AS count FROM hosted_scripts WHERE guild_id = ?').get(interaction.guildId).count;
-    return interaction.reply({ ephemeral: true, content: `Kolsec is online.\nScripts: **${scriptCount}**\nKeys: **${keyCount}**\nHosted scripts: **${hostedCount}**\nWebsite: ${publicBaseUrl()}` });
+    return interaction.reply({ ephemeral: true, content: `Karma Sources is online.\nScripts: **${scriptCount}**\nKeys: **${keyCount}**\nHosted scripts: **${hostedCount}**\nWebsite: ${publicBaseUrl()}` });
   }
 
   if (commandName === 'setup' || commandName === 'genkey') {
@@ -533,20 +533,14 @@ async function handleCommand(interaction) {
       return interaction.reply({ ephemeral: true, content: 'You need Administrator or the configured admin role to use this command.' });
     }
 
-    const settings = getSettings(interaction.guildId);
-    const channel = interaction.options.getChannel('channel', false) || (settings?.panel_channel_id ? await interaction.guild.channels.fetch(settings.panel_channel_id).catch(() => null) : interaction.channel);
     const panelTitle = interaction.options.getString('title', true);
     const panelDescription = interaction.options.getString('description', true);
     const adminRole = interaction.options.getRole('admin_role', false);
     const customerRole = interaction.options.getRole('customer_role', false);
     const logChannel = interaction.options.getChannel('log_channel', false);
 
-    if (!channel || !channel.isTextBased()) {
-      return interaction.reply({ ephemeral: true, content: 'Panel channel not found.' });
-    }
-
     const patch = {
-      panel_channel_id: channel.id,
+      panel_channel_id: interaction.channelId,
       panel_title: panelTitle,
       panel_description: panelDescription
     };
@@ -555,19 +549,14 @@ async function handleCommand(interaction) {
     if (logChannel) patch.log_channel_id = logChannel.id;
     upsertSettings(interaction.guildId, patch);
 
-    const payload = { embeds: [panelEmbed(interaction.guildId)], components: panelButtons() };
-
-    // If posting to the current channel, the interaction reply IS the panel.
-    // This prevents the old behavior of sending the panel + a second confirmation message.
-    if (channel.id === interaction.channelId) {
-      const panelMessage = await interaction.reply({ ...payload, fetchReply: true });
-      upsertSettings(interaction.guildId, { panel_message_id: panelMessage.id });
-      return;
-    }
-
-    const panelMessage = await channel.send(payload);
+    // Only ONE Discord response: the panel itself. No channel.send + confirmation.
+    const panelMessage = await interaction.reply({
+      embeds: [panelEmbed(interaction.guildId)],
+      components: panelButtons(),
+      fetchReply: true
+    });
     upsertSettings(interaction.guildId, { panel_message_id: panelMessage.id });
-    return interaction.reply({ ephemeral: true, content: `Panel posted in ${channel}.` });
+    return;
   }
 
   const adminCommands = ['generatekey', 'apply', 'hostscript', 'resethwid', 'createscript', 'scripts', 'revoke', 'extendkey', 'deletekey', 'panel', 'loader', 'obfuscate'];
@@ -906,41 +895,44 @@ function kolsecHomePage() {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Kolsec - Lua Whitelist & Script Protection</title>
-  <meta name="description" content="Kolsec is a Discord-based Lua whitelist, script hosting, HWID, and obfuscation platform." />
+  <title>Karma Sources - Lua Code Protection</title>
+  <meta name="description" content="Karma Sources protects, hosts, and licenses Lua scripts with Discord panels, HWID locking, and loadstrings." />
   <style>
-    *{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;background:#000;color:#fff;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Arial,sans-serif} a{color:inherit;text-decoration:none}.wrap{width:min(1180px,92%);margin:auto}.bg{position:fixed;inset:0;z-index:-1;background:radial-gradient(circle at 50% -10%,rgba(255,255,255,.18),transparent 34%),radial-gradient(circle at 10% 20%,rgba(255,255,255,.08),transparent 26%),#000}.gridbg{position:fixed;inset:0;z-index:-1;opacity:.08;background-image:linear-gradient(#fff 1px,transparent 1px),linear-gradient(90deg,#fff 1px,transparent 1px);background-size:64px 64px;mask-image:linear-gradient(to bottom,#000,transparent 80%)}
-    header{position:sticky;top:0;z-index:10;background:rgba(0,0,0,.72);backdrop-filter:blur(18px);border-bottom:1px solid #1f1f1f}.nav{height:76px;display:flex;align-items:center;justify-content:space-between}.brand{font-size:26px;font-weight:950;letter-spacing:-.06em}.brand span{display:inline-grid;place-items:center;width:36px;height:36px;border-radius:12px;background:#fff;color:#000;margin-right:10px}.links{display:flex;gap:24px;color:#aaa;font-size:14px}.links a:hover{color:#fff}.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;padding:13px 19px;border-radius:999px;font-weight:850;border:1px solid #fff;background:#fff;color:#000}.btn.dark{background:#050505;color:#fff;border-color:#333}.btn:hover{transform:translateY(-1px)}
-    .hero{padding:96px 0 78px;text-align:center}.pill{display:inline-flex;gap:9px;align-items:center;padding:9px 14px;border:1px solid #333;border-radius:999px;background:#090909;color:#d7d7d7}.hero h1{font-size:clamp(48px,8vw,104px);line-height:.9;letter-spacing:-.09em;margin:22px auto;max-width:1020px}.hero p{font-size:clamp(17px,2vw,22px);line-height:1.6;color:#b8b8b8;max-width:820px;margin:0 auto 32px}.actions{display:flex;justify-content:center;gap:14px;flex-wrap:wrap}.preview{margin:58px auto 0;max-width:920px;border:1px solid #242424;border-radius:30px;background:linear-gradient(180deg,#111,#050505);box-shadow:0 30px 120px rgba(255,255,255,.07);padding:20px}.screen{border:1px solid #222;border-radius:22px;background:#080808;overflow:hidden;text-align:left}.top{display:flex;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #1f1f1f;color:#888}.rows{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:18px}.tile{border:1px solid #252525;background:#0d0d0d;border-radius:18px;padding:20px}.tile b{display:block;margin-bottom:8px}.tile small{color:#999;line-height:1.5}
-    .section{padding:76px 0}.title{max-width:780px}.kicker{color:#aaa;text-transform:uppercase;letter-spacing:.18em;font-size:12px;font-weight:900}.title h2{font-size:clamp(36px,5vw,66px);line-height:.95;letter-spacing:-.075em;margin:10px 0}.title p{color:#aaa;line-height:1.65}.features{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:30px}.card{border:1px solid #242424;border-radius:28px;background:linear-gradient(180deg,#101010,#070707);padding:28px;min-height:220px}.icon{font-size:30px;margin-bottom:18px}.card h3{font-size:22px;margin:0 0 10px}.card p{color:#aaa;line-height:1.65;margin:0}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.stat{border:1px solid #242424;border-radius:28px;background:#080808;text-align:center;padding:32px}.num{font-size:56px;font-weight:950;letter-spacing:-.07em}.label{color:#999}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.step{padding:26px;border-radius:28px;border:1px solid #242424;background:#0a0a0a}.step span{display:grid;place-items:center;width:38px;height:38px;border-radius:50%;background:#fff;color:#000;font-weight:950;margin-bottom:18px}.pricing{display:grid;grid-template-columns:1fr 1fr;gap:18px}.price{border:1px solid #252525;border-radius:30px;background:#080808;padding:30px}.price.hot{background:#fff;color:#000}.money{font-size:50px;font-weight:950;letter-spacing:-.07em;margin:12px 0}.price ul{list-style:none;padding:0;margin:20px 0;display:grid;gap:12px}.price li:before{content:'✓';margin-right:10px}.price.hot .btn{background:#000;color:#fff}.cta{text-align:center;border:1px solid #2b2b2b;border-radius:34px;background:radial-gradient(circle at 50% 0,rgba(255,255,255,.14),transparent 35%),#080808;padding:56px}.cmds{line-height:2.2}.cmds code{background:#111;border:1px solid #2a2a2a;border-radius:10px;padding:5px 8px;color:#fff}.footer{border-top:1px solid #1d1d1d;color:#777;padding:30px 0;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}@media(max-width:860px){.links{display:none}.hero{text-align:left}.actions{justify-content:flex-start}.features,.steps,.stats,.pricing,.rows{grid-template-columns:1fr}.cta{padding:34px 20px}}
+    :root{--bg:#030402;--side:#070806;--card:#0d0f0b;--line:#20231b;--text:#f6f3e9;--muted:#8f9189;--gold:#e3b944;--gold2:#ffd866;--soft:#151811}
+    *{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;background:radial-gradient(circle at 70% 20%,rgba(227,185,68,.13),transparent 28%),linear-gradient(90deg,#030402,#060704);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Arial,sans-serif;overflow-x:hidden} a{color:inherit;text-decoration:none} code{background:#11150e;border:1px solid #2b2d24;border-radius:10px;padding:4px 7px;color:#fff}.app{display:grid;grid-template-columns:310px 1fr;min-height:100vh}.sidebar{position:sticky;top:0;height:100vh;background:linear-gradient(180deg,#090a08,#050604);border-right:1px solid var(--line);padding:26px 22px;display:flex;flex-direction:column}.brand{display:flex;align-items:center;gap:14px;padding-bottom:28px;border-bottom:1px solid #151812}.brand img{width:54px;height:54px;border-radius:16px;object-fit:cover;box-shadow:0 0 45px rgba(227,185,68,.2)}.brand b{display:block;font-size:18px;letter-spacing:.04em}.brand small{color:var(--gold);font-size:11px;letter-spacing:.18em;text-transform:uppercase}.navblock{margin-top:24px}.label{color:#777b72;margin:0 0 12px 6px;font-size:13px}.navitem{display:flex;align-items:center;gap:14px;border-radius:14px;padding:13px 12px;color:#d9d6ca;font-weight:650}.navitem:hover,.navitem.active{background:#11140e;color:#fff}.navitem.active{border-left:4px solid var(--gold);padding-left:8px}.ico{width:24px;text-align:center;color:var(--gold)}.sidebottom{margin-top:auto}.dashbtn{display:flex;align-items:center;justify-content:center;gap:12px;width:100%;background:linear-gradient(180deg,var(--gold2),var(--gold));color:#0a0a06;border:none;border-radius:14px;padding:16px;font-weight:900;box-shadow:0 0 50px rgba(227,185,68,.22)}.version{text-align:center;color:#666;margin-top:14px;font-size:11px;letter-spacing:.2em}.main{min-width:0}.hero{min-height:100vh;display:grid;place-items:center;padding:46px}.hero-inner{width:min(1040px,100%)}.pill{display:inline-flex;align-items:center;gap:10px;border:1px solid #2c2d24;background:rgba(13,15,11,.72);color:#d9d6ca;border-radius:999px;padding:9px 14px}.hero h1{font-size:clamp(52px,8vw,112px);line-height:.88;letter-spacing:-.085em;margin:24px 0}.hero p{max-width:760px;color:#b5b3aa;font-size:clamp(17px,2vw,22px);line-height:1.65}.actions{display:flex;gap:14px;flex-wrap:wrap;margin:30px 0}.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;border-radius:999px;padding:13px 18px;font-weight:900;border:1px solid #fff;background:#fff;color:#000}.btn.gold{background:linear-gradient(180deg,var(--gold2),var(--gold));border-color:var(--gold);color:#090905}.btn.dark{background:#070806;color:#fff;border-color:#2b2d24}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:30px}.stat{border:1px solid var(--line);border-radius:22px;background:rgba(10,12,8,.7);padding:22px}.num{font-size:42px;font-weight:950;color:#fff}.stat span{color:#8d9087}.panel{border:1px solid var(--line);border-radius:28px;background:linear-gradient(180deg,rgba(15,18,12,.92),rgba(7,8,6,.92));padding:24px;margin-top:26px;box-shadow:0 25px 90px rgba(0,0,0,.45)}.features{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.feature{border:1px solid #24271e;border-radius:18px;background:#090b08;padding:18px}.feature h3{margin:8px 0}.feature p{color:#9fa197;line-height:1.55;margin:0}.mobiletop{display:none;padding:14px 18px;border-bottom:1px solid var(--line);align-items:center;gap:12px;background:#070806;position:sticky;top:0;z-index:20}.mobiletop img{width:40px;height:40px;border-radius:12px}.mobiletop b{font-size:18px}@media(max-width:900px){.app{display:block}.sidebar{position:relative;height:auto;border-right:0;border-bottom:1px solid var(--line)}.mobiletop{display:flex}.hero{padding:28px 20px}.stats,.features{grid-template-columns:1fr}.brand{display:none}.sidebottom{margin-top:24px}}
   </style>
 </head>
 <body>
-  <div class="bg"></div><div class="gridbg"></div>
-  <header><div class="wrap nav"><a class="brand" href="/"><span>K</span>Kolsec</a><nav class="links"><a href="#features">Features</a><a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="#commands">Commands</a></nav><a class="btn dark" href="/login">Get Started</a></div></header>
-  <main>
-    <section class="hero"><div class="wrap"><div class="pill">Discord OAuth enabled · Lua protection</div><h1>Lua Whitelist & Script Protection</h1><p>Kolsec helps you protect Lua scripts, generate whitelist keys, reset HWIDs, host loadstrings, and manage access straight from Discord.</p><div class="actions"><a class="btn" href="/login">Get Started with Discord</a><a class="btn dark" href="#how">How it works</a></div><div class="preview"><div class="screen"><div class="top"><b>Kolsec Dashboard</b><span>online</span></div><div class="rows"><div class="tile"><b>${scriptCount}</b><small>Scripts created</small></div><div class="tile"><b>${keyCount}</b><small>License keys</small></div><div class="tile"><b>${hostedCount}</b><small>Hosted loadstrings</small></div></div></div></div></div></section>
-    <section id="features" class="section"><div class="wrap"><div class="title"><div class="kicker">Powerful features</div><h2>Everything you need to manage your scripts automatically.</h2><p>Built for Discord communities that sell or distribute Lua scripts.</p></div><div class="features"><div class="card"><div class="icon">🔐</div><h3>Whitelist Keys</h3><p>Generate expiring or lifetime keys and let users redeem from your panel.</p></div><div class="card"><div class="icon">🖥️</div><h3>HWID Locking</h3><p>Bind each key to the first device and reset it when support is needed.</p></div><div class="card"><div class="icon">⚡</div><h3>Hosted Loadstrings</h3><p>Host scripts on Render and serve clean loadstrings at /script/id.lua.</p></div><div class="card"><div class="icon">🤖</div><h3>Discord Bot</h3><p>Panels, buttons, logs, buyer roles, key info, and admin commands.</p></div><div class="card"><div class="icon">🧩</div><h3>Obfuscation</h3><p>Use the local Kers0ne-style wrapper when applying or hosting Lua.</p></div><div class="card"><div class="icon">📡</div><h3>REST API</h3><p>Verify keys from loaders using a protected verification endpoint.</p></div></div></div></section>
-    <section id="how" class="section"><div class="wrap"><div class="title"><div class="kicker">How it works</div><h2>Set up once. Sell forever.</h2></div><div class="steps"><div class="step"><span>1</span><h3>Run /panel</h3><p>Post the Kolsec panel with your custom title and description.</p></div><div class="step"><span>2</span><h3>Run /apply</h3><p>Create a script, host the loader, and save the API secret.</p></div><div class="step"><span>3</span><h3>Generate keys</h3><p>Users redeem keys and your loader verifies access.</p></div></div></div></section>
-    <section class="section"><div class="wrap"><div class="stats"><div class="stat"><div class="num">${scriptCount}</div><div class="label">scripts</div></div><div class="stat"><div class="num">${keyCount}</div><div class="label">keys</div></div><div class="stat"><div class="num">${hostedCount}</div><div class="label">hosted scripts</div></div></div></div></section>
-    <section id="pricing" class="section"><div class="wrap"><div class="title"><div class="kicker">Pricing</div><h2>Simple plans. Real protection.</h2></div><div class="pricing"><div class="price"><h3>Citizen</h3><div class="money">$0</div><ul><li>Discord panel</li><li>Key generation</li><li>HWID resets</li><li>Hosted loadstrings</li></ul><a class="btn dark" href="/login">Get Started</a></div><div class="price hot"><h3>Royal</h3><div class="money">$3<span style="font-size:18px">/mo</span></div><ul><li>Unlimited hosting</li><li>Obfuscation workflow</li><li>Priority support</li><li>Advanced automation</li></ul><a class="btn" href="/login">Upgrade</a></div></div></div></section>
-    <section id="commands" class="section"><div class="wrap"><div class="cta"><h2>Ready to protect your scripts?</h2><p>Sign in with Discord to start.</p><div class="actions"><a class="btn" href="/login">Get Started</a><a class="btn dark" href="/health">Status</a></div><p class="cmds"><code>/panel</code> <code>/apply</code> <code>/generatekey</code> <code>/hostscript</code> <code>/resethwid</code> <code>/redeem</code> <code>/keyinfo</code></p></div></div></section>
-  </main>
-  <div class="wrap footer"><span>Kolsec © ${new Date().getFullYear()}</span><span>Lua Whitelist & Script Protection</span></div>
+  <div class="mobiletop"><img src="/assets/karma-logo.png" alt="Karma Sources"><b>Karma Sources</b></div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><img src="/assets/karma-logo.png" alt="Karma Sources"><div><b>KARMA</b><small>Lua Code Protection</small></div></div>
+      <div class="navblock"><p class="label">Script sections</p><a class="navitem active" href="#overview"><span class="ico">⌁</span>Overview</a><a class="navitem" href="#source"><span class="ico">▧</span>Source</a><a class="navitem" href="#loadstring"><span class="ico">⚿</span>Loadstring</a><a class="navitem" href="#slots"><span class="ico">▦</span>Slots</a><a class="navitem" href="#discord"><span class="ico">○</span>Discord</a><a class="navitem" href="#settings"><span class="ico">⚙</span>Settings</a></div>
+      <div class="navblock"><p class="label">Explore</p><a class="navitem" href="#how"><span class="ico">ϟ</span>How it works</a><a class="navitem" href="#faq"><span class="ico">?</span>FAQ</a><a class="navitem" href="${DISCORD_INVITE_URL}"><span class="ico">☊</span>Support</a><a class="navitem" href="#changelog"><span class="ico">▤</span>Changelog</a><a class="navitem" href="/login"><span class="ico">▣</span>Redeem code</a></div>
+      <div class="navblock"><p class="label">Community</p><a class="navitem" href="${DISCORD_INVITE_URL}"><span class="ico">◯</span>Discord community</a></div>
+      <div class="sidebottom"><a class="dashbtn" href="/login">▦ Go to Dashboard</a><div class="version">KARMA · V. BETA</div></div>
+    </aside>
+    <main class="main">
+      <section id="overview" class="hero"><div class="hero-inner"><span class="pill">⚡ Discord OAuth · Lua whitelist · Script hosting</span><h1>Karma Sources Script Protection</h1><p>Host scripts, generate keys, serve loadstrings, reset HWIDs, and control buyer access from Discord and the web dashboard.</p><div class="actions"><a class="btn gold" href="/login">Get Started</a><a class="btn dark" href="#how">How it works</a></div><div id="slots" class="stats"><div class="stat"><div class="num">${scriptCount}</div><span>Products</span></div><div class="stat"><div class="num">${keyCount}</div><span>Keys</span></div><div class="stat"><div class="num">${hostedCount}</div><span>Hosted scripts</span></div></div><div id="how" class="panel"><div class="features"><div class="feature"><div>🔐</div><h3>Whitelist</h3><p>Generate and redeem license keys through Discord panels.</p></div><div class="feature"><div>⚿</div><h3>Loadstrings</h3><p>Serve Roblox-style loadstrings from your Render URL.</p></div><div class="feature"><div>⚙</div><h3>HWID</h3><p>Lock keys to devices and reset them with commands.</p></div></div></div><div id="loadstring" class="panel"><h2>Commands</h2><p><code>/panel</code> <code>/apply</code> <code>/generatekey</code> <code>/hostscript</code> <code>/resethwid</code> <code>/redeem</code> <code>/keyinfo</code></p></div></div></section>
+    </main>
+  </div>
 </body>
 </html>`;
 }
 
 function discordDashboardPage(user) {
   const username = escapeHtml(user.global_name || user.username || 'Discord User');
-  const avatar = user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=128` : '';
+  const avatar = user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=128` : '/assets/karma-logo.png';
   const scripts = db.prepare('SELECT id, name, obfuscated, created_at FROM hosted_scripts WHERE created_by = ? ORDER BY created_at DESC').all(user.id);
   const remaining = Math.max(0, MAX_WEB_SCRIPTS_PER_USER - scripts.length);
   const scriptRows = scripts.length
-    ? scripts.map(s => `<div class="script"><div><b>${escapeHtml(s.name)}</b><small>${s.obfuscated ? 'Obfuscated' : 'Plain'} · ${escapeHtml(s.created_at)}</small><code>loadstring(game:HttpGet("${publicBaseUrl()}/script/${s.id}.lua"))()</code></div><form method="post" action="/dashboard/scripts/${s.id}/delete"><button>Delete</button></form></div>`).join('')
-    : `<p class="muted">No scripts yet. Create your first hosted loadstring below.</p>`;
+    ? scripts.map(s => `<div class="script"><div><b>${escapeHtml(s.name)}</b><small>${s.obfuscated ? 'Obfuscated' : 'Plain'} · ${escapeHtml(s.created_at)}</small><code>loadstring(game:HttpGet("${publicBaseUrl()}/script/${s.id}.lua"))()</code></div><form method="post" action="/dashboard/scripts/${s.id}/delete"><button class="danger">Delete</button></form></div>`).join('')
+    : `<p class="muted">No scripts yet. Create your first hosted loadstring in Source.</p>`;
 
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kolsec Dashboard</title><style>*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font-family:Inter,Arial,sans-serif}a{color:inherit}.wrap{width:min(1120px,92%);margin:38px auto}.nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.card{border:1px solid #242424;border-radius:28px;background:#080808;padding:26px;margin-bottom:18px}.profile{display:flex;align-items:center;gap:16px}.avatar{width:70px;height:70px;border-radius:50%;border:1px solid #333}.muted,small{color:#999}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.stat{border:1px solid #242424;border-radius:22px;background:#050505;padding:20px}.num{font-size:38px;font-weight:950}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.script{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:start;border:1px solid #222;border-radius:18px;padding:16px;margin:12px 0;background:#050505}.script b,.script small,.script code{display:block}.script code{white-space:pre-wrap;word-break:break-all;background:#111;border:1px solid #2a2a2a;border-radius:12px;padding:10px;margin-top:10px;color:#eee}input,textarea{width:100%;background:#050505;color:#fff;border:1px solid #2a2a2a;border-radius:14px;padding:12px;margin:8px 0 14px;font:inherit}textarea{min-height:180px}button,.btn{display:inline-flex;border:1px solid #fff;border-radius:999px;background:#fff;color:#000;padding:11px 16px;font-weight:850;text-decoration:none;cursor:pointer}.btn.dark,button.dark{background:#000;color:#fff;border-color:#333}.check{display:flex;gap:10px;align-items:center;margin-bottom:14px}.check input{width:auto;margin:0}@media(max-width:800px){.grid,.stats,.script{grid-template-columns:1fr}}</style></head><body><div class="wrap"><div class="nav"><h1>Kolsec Dashboard</h1><div><a class="btn dark" href="${DISCORD_INVITE_URL}">Connect Discord</a> <a class="btn dark" href="/logout">Logout</a></div></div><div class="card profile">${avatar ? `<img class="avatar" src="${avatar}" alt="avatar">` : ''}<div><h2>Welcome, ${username}</h2><p class="muted">Discord connected. You can host up to <b>${MAX_WEB_SCRIPTS_PER_USER}</b> scripts.</p></div></div><div class="stats"><div class="stat"><div class="num">${scripts.length}</div><div class="muted">Scripts used</div></div><div class="stat"><div class="num">${remaining}</div><div class="muted">Slots left</div></div><div class="stat"><div class="num">1000</div><div class="muted">Max scripts</div></div></div><div class="grid"><div class="card"><h2>Create Script</h2><form method="post" action="/dashboard/scripts"><label>Name</label><input name="name" maxlength="80" placeholder="My Loader" required><label>Lua Code</label><textarea name="code" maxlength="4000" placeholder='print("Kolsec")' required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate with Kers0ne-style wrapper</label><button type="submit">Host Script</button></form></div><div class="card"><h2>Your Scripts</h2>${scriptRows}</div></div><div class="card"><h2>Discord Commands</h2><p><code>/panel</code> <code>/apply</code> <code>/generatekey</code> <code>/hostscript</code> <code>/resethwid</code></p><a class="btn" href="/">Back Home</a></div></div></body></html>`;
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma Sources Dashboard</title><style>
+:root{--bg:#030402;--side:#070806;--card:#0d0f0b;--line:#20231b;--text:#f6f3e9;--muted:#8f9189;--gold:#e3b944;--gold2:#ffd866}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 80% 10%,rgba(227,185,68,.12),transparent 30%),#030402;color:var(--text);font-family:Inter,Arial,sans-serif}a{color:inherit;text-decoration:none}.app{display:grid;grid-template-columns:310px 1fr;min-height:100vh}.sidebar{position:sticky;top:0;height:100vh;background:linear-gradient(180deg,#090a08,#050604);border-right:1px solid var(--line);padding:26px 22px;display:flex;flex-direction:column}.brand{display:flex;align-items:center;gap:14px;padding-bottom:28px;border-bottom:1px solid #151812}.brand img{width:54px;height:54px;border-radius:16px;object-fit:cover}.brand b{display:block;font-size:18px}.brand small{color:var(--gold);font-size:11px;letter-spacing:.18em;text-transform:uppercase}.navblock{margin-top:24px}.label{color:#777b72;margin:0 0 12px 6px;font-size:13px}.navitem{display:flex;align-items:center;gap:14px;border-radius:14px;padding:13px 12px;color:#d9d6ca;font-weight:650}.navitem.active,.navitem:hover{background:#11140e;color:#fff}.navitem.active{border-left:4px solid var(--gold);padding-left:8px}.ico{width:24px;text-align:center;color:var(--gold)}.sidebottom{margin-top:auto}.dashbtn,button,.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;background:linear-gradient(180deg,var(--gold2),var(--gold));color:#090905;border:none;border-radius:14px;padding:13px 16px;font-weight:900;text-decoration:none;cursor:pointer}.version{text-align:center;color:#666;margin-top:14px;font-size:11px;letter-spacing:.2em}.main{padding:34px;min-width:0}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}.profile{display:flex;align-items:center;gap:14px}.avatar{width:54px;height:54px;border-radius:16px;border:1px solid #2b2d24;object-fit:cover}.muted,small{color:var(--muted)}.card{border:1px solid var(--line);border-radius:28px;background:linear-gradient(180deg,#0d0f0b,#070806);padding:24px;margin-bottom:18px}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.stat{border:1px solid #24271e;border-radius:20px;background:#070806;padding:20px}.num{font-size:40px;font-weight:950}.grid{display:grid;grid-template-columns:420px 1fr;gap:18px}.script{display:grid;grid-template-columns:1fr auto;gap:14px;border:1px solid #24271e;border-radius:18px;background:#080a07;padding:16px;margin:12px 0}.script b,.script small,.script code{display:block}.script code{white-space:pre-wrap;word-break:break-all;background:#11150e;border:1px solid #2b2d24;border-radius:12px;padding:10px;margin-top:10px;color:#eee}input,textarea{width:100%;background:#050604;color:#fff;border:1px solid #2b2d24;border-radius:14px;padding:12px;margin:8px 0 14px;font:inherit}textarea{min-height:210px}.check{display:flex;gap:10px;align-items:center;margin-bottom:14px}.check input{width:auto;margin:0}.danger{background:#23100f;color:#ffb4ad;border:1px solid #5b2521}.mobiletop{display:none;padding:14px 18px;border-bottom:1px solid var(--line);align-items:center;gap:12px;background:#070806;position:sticky;top:0;z-index:20}.mobiletop img{width:40px;height:40px;border-radius:12px}@media(max-width:920px){.app{display:block}.sidebar{position:relative;height:auto;border-right:0;border-bottom:1px solid var(--line)}.brand{display:none}.mobiletop{display:flex}.main{padding:20px}.grid,.stats,.script{grid-template-columns:1fr}.sidebottom{margin-top:20px}}
+</style></head><body><div class="mobiletop"><img src="/assets/karma-logo.png"><b>Karma Sources</b></div><div class="app"><aside class="sidebar"><div class="brand"><img src="/assets/karma-logo.png"><div><b>KARMA</b><small>Lua Code Protection</small></div></div><div class="navblock"><p class="label">Script sections</p><a class="navitem active" href="#overview"><span class="ico">⌁</span>Overview</a><a class="navitem" href="#source"><span class="ico">▧</span>Source</a><a class="navitem" href="#loadstring"><span class="ico">⚿</span>Loadstring</a><a class="navitem" href="#slots"><span class="ico">▦</span>Slots</a><a class="navitem" href="${DISCORD_INVITE_URL}"><span class="ico">○</span>Discord</a><a class="navitem" href="#settings"><span class="ico">⚙</span>Settings</a></div><div class="navblock"><p class="label">Explore</p><a class="navitem" href="/"><span class="ico">ϟ</span>How it works</a><a class="navitem" href="/health"><span class="ico">?</span>Status</a><a class="navitem" href="${DISCORD_INVITE_URL}"><span class="ico">☊</span>Support</a><a class="navitem" href="/logout"><span class="ico">↩</span>Logout</a></div><div class="sidebottom"><a class="dashbtn" href="#source">▦ Create Script</a><div class="version">KARMA · V. BETA</div></div></aside><main class="main"><div class="top"><div class="profile"><img class="avatar" src="${avatar}"><div><h1>Dashboard</h1><p class="muted">Welcome, ${username}</p></div></div><a class="btn" href="${DISCORD_INVITE_URL}">Connect Discord</a></div><section id="overview" class="stats"><div class="stat"><div class="num">${scripts.length}</div><span class="muted">Scripts used</span></div><div class="stat"><div class="num">${remaining}</div><span class="muted">Slots left</span></div><div class="stat"><div class="num">1000</div><span class="muted">Max scripts</span></div></section><div class="grid"><section id="source" class="card"><h2>Source</h2><p class="muted">Paste Lua source and host it as a loadstring.</p><form method="post" action="/dashboard/scripts"><label>Name</label><input name="name" maxlength="80" placeholder="My Loader" required><label>Lua Code</label><textarea name="code" maxlength="4000" placeholder='print("Karma Sources")' required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate with Kers0ne-style wrapper</label><button type="submit">Host Script</button></form></section><section id="loadstring" class="card"><h2>Loadstrings</h2>${scriptRows}</section></div><section id="settings" class="card"><h2>Bot commands</h2><p><code>/panel</code> <code>/apply</code> <code>/generatekey</code> <code>/hostscript</code> <code>/resethwid</code> <code>/redeem</code> <code>/keyinfo</code></p></section></main></div></body></html>`;
 }
 
 function makeSession(user) {
@@ -1000,9 +992,10 @@ function startApiServer() {
   const app = express();
   app.use(express.json({ limit: '64kb' }));
   app.use(express.urlencoded({ extended: true, limit: '256kb' }));
+  app.use('/assets', express.static('public'));
 
   app.get('/', (req, res) => res.type('html').send(kolsecHomePage()));
-  app.get('/health', (req, res) => res.json({ ok: true, name: 'Kolsec' }));
+  app.get('/health', (req, res) => res.json({ ok: true, name: 'Karma Sources' }));
 
   app.get('/login', (req, res) => {
     const state = crypto.randomBytes(18).toString('hex');
@@ -1118,14 +1111,14 @@ function startApiServer() {
 
   app.get('/script/:id.lua', (req, res) => {
     const script = db.prepare('SELECT * FROM hosted_scripts WHERE id = ?').get(req.params.id);
-    if (!script) return res.status(404).type('text/plain').send('-- Kolsec: script not found');
+    if (!script) return res.status(404).type('text/plain').send('-- Karma Sources: script not found');
     res.setHeader('Cache-Control', 'no-store');
     return res.type('text/plain').send(script.code);
   });
 
   app.get('/loadstring/:id', (req, res) => {
     const script = db.prepare('SELECT * FROM hosted_scripts WHERE id = ?').get(req.params.id);
-    if (!script) return res.status(404).type('text/plain').send('-- Kolsec: script not found');
+    if (!script) return res.status(404).type('text/plain').send('-- Karma Sources: script not found');
     const base = publicBaseUrl();
     const rawUrl = `${base}/script/${script.id}.lua`;
     return res.type('text/plain').send(`loadstring(game:HttpGet("${rawUrl}"))()`);
