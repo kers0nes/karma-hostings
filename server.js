@@ -36,7 +36,8 @@ const {
   DISCORD_OAUTH_CLIENT_ID,
   DISCORD_CLIENT_SECRET,
   SESSION_SECRET,
-  DISCORD_INVITE_URL = 'https://discord.com'
+  DISCORD_INVITE_URL = 'https://discord.com',
+  OWNER_ID = '1207803375807373415'
 } = process.env;
 
 const OAUTH_CLIENT_ID = DISCORD_OAUTH_CLIENT_ID || CLIENT_ID || '1525736430813450342';
@@ -249,10 +250,37 @@ CREATE TABLE IF NOT EXISTS hosted_scripts (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS website_users (
+  id TEXT PRIMARY KEY,
+  username TEXT,
+  global_name TEXT,
+  avatar TEXT,
+  first_login TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_login TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS premium_codes (
+  code TEXT PRIMARY KEY,
+  plan TEXT NOT NULL DEFAULT 'premium',
+  redeemed_by TEXT,
+  redeemed_at TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS banned_hwids (
+  hwid TEXT PRIMARY KEY,
+  reason TEXT,
+  banned_by TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_scripts_guild ON scripts(guild_id);
 CREATE INDEX IF NOT EXISTS idx_licenses_script ON licenses(script_id);
 CREATE INDEX IF NOT EXISTS idx_licenses_user ON licenses(discord_user_id);
 CREATE INDEX IF NOT EXISTS idx_hosted_scripts_guild ON hosted_scripts(guild_id);
+CREATE INDEX IF NOT EXISTS idx_hosted_scripts_user ON hosted_scripts(created_by);
+CREATE INDEX IF NOT EXISTS idx_premium_codes_redeemed_by ON premium_codes(redeemed_by);
 `);
 
 // Migrations for older Render SQLite databases.
@@ -355,7 +383,8 @@ function publicBaseUrl() {
 function kers0neLocalObfuscate(luaCode) {
   // Kers0ne-style local obfuscator based on the protected output format the user provided.
   // The uploaded file is protected output, not reusable source code, so this generator emits
-  // the same style: banner, encoded byte table, rolling XOR decoder, loadstring wrapper.
+  // the same style: banner, randomized locals, encoded byte table, rolling XOR decoder,
+  // checksum/anti-tamper checks, and a loadstring wrapper.
   const source = String(luaCode);
   const seed = crypto.randomBytes(1)[0] || 173;
   let prev = 0;
@@ -367,10 +396,10 @@ function kers0neLocalObfuscate(luaCode) {
   });
   const checksum = Buffer.from(source, 'utf8').reduce((a, b) => (a + b) % 65521, 1);
   const chunks = [];
-  for (let i = 0; i < encoded.length; i += 28) chunks.push(encoded.slice(i, i + 28).join(','));
-
-  const names = Array.from({ length: 12 }, () => `_${crypto.randomBytes(2).toString('hex')}`);
-  const [nChar, nBand, nBxor, nConcat, nByte, nAssert, nLoad, nData, nOut, nSeed, nPrev, nChk] = names;
+  for (let i = 0; i < encoded.length; i += 24) chunks.push(encoded.slice(i, i + 24).join(','));
+  const names = Array.from({ length: 16 }, () => `_${crypto.randomBytes(2).toString('hex')}`);
+  const [nChar, nBand, nBxor, nConcat, nByte, nAssert, nLoad, nData, nOut, nSeed, nPrev, nChk, nPcall, nType, nErr, nHome] = names;
+  const home = publicBaseUrl();
 
   return `--[[
 \tProtected By Kers0ne Obfuscator
@@ -384,10 +413,21 @@ return(function(...)
   local ${nByte}=string.byte
   local ${nAssert}=assert
   local ${nLoad}=loadstring
+  local ${nPcall}=pcall
+  local ${nType}=type
+  local ${nErr}=error
+  local ${nHome}=${JSON.stringify(home)}
   local ${nSeed}=${seed}
   local ${nData}={${chunks.join(',')}}
   local ${nOut}={}
   local ${nPrev}=0
+  local function _tamper()
+    -- If a dumper breaks this wrapper, point them back to the homepage and stop the dumped copy.
+    if setclipboard then ${nPcall}(setclipboard,${nHome}) end
+    if warn then ${nPcall}(warn,"Kers0ne protection triggered: "..${nHome}) end
+    return nil
+  end
+  if ${nType}(${nLoad})~="function" or ${nType}(${nConcat})~="function" then return _tamper() end
   for _i=1,#${nData} do
     local _e=${nData}[_i]
     ${nOut}[_i]=${nChar}(${nBxor}(_e,${nBand}(${nSeed}+_i*37+${nPrev},255)))
@@ -396,8 +436,9 @@ return(function(...)
   local _src=${nConcat}(${nOut})
   local ${nChk}=1
   for _i=1,#_src do ${nChk}=(${nChk}+${nByte}(_src,_i))%65521 end
-  if ${nChk}~=${checksum} then return nil end
-  local _fn=${nAssert}(${nLoad}(_src,"Kers0neObfuscated"))
+  if ${nChk}~=${checksum} then return _tamper() end
+  local _ok,_fn=${nPcall}(${nLoad},_src,"Kers0neObfuscated")
+  if not _ok or ${nType}(_fn)~="function" then return _tamper() end
   return _fn(...)
 end)(...)
 `;
@@ -987,17 +1028,47 @@ function makeUserApiKey(userId) {
   return `ks_${userId}_${sig}`;
 }
 
-function discordDashboardPage(user) {
+function discordDashboardPage(user, req = { query: {} }) {
   const username = escapeHtml(user.global_name || user.username || 'Discord User');
   const avatar = user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=128` : '/assets/karma-logo.png';
   const apiKey = makeUserApiKey(user.id);
+  const tab = String(req.query.tab || 'overview');
+  const selectedId = String(req.query.script || '');
   const scripts = db.prepare('SELECT id, name, obfuscated, created_at FROM hosted_scripts WHERE created_by = ? ORDER BY created_at DESC').all(user.id);
+  const selected = selectedId ? db.prepare('SELECT * FROM hosted_scripts WHERE id = ? AND created_by = ?').get(selectedId, user.id) : (scripts[0] ? db.prepare('SELECT * FROM hosted_scripts WHERE id = ? AND created_by = ?').get(scripts[0].id, user.id) : null);
   const remaining = Math.max(0, MAX_WEB_SCRIPTS_PER_USER - scripts.length);
-  const scriptRows = scripts.length
-    ? scripts.map(s => `<div class="script"><div><b>${escapeHtml(s.name)}</b><small>${s.obfuscated ? 'Obfuscated' : 'Plain'} · ${escapeHtml(s.created_at)}</small><code>loadstring(game:HttpGet("${publicBaseUrl()}/script/${s.id}.lua"))()</code></div><form method="post" action="/dashboard/scripts/${s.id}/delete"><button class="danger">Delete</button></form></div>`).join('')
-    : `<p class="muted">No scripts yet. Upload a Lua file or paste source below.</p>`;
+  const botInvite = `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(OAUTH_CLIENT_ID)}&permissions=268435456&scope=bot%20applications.commands`;
+  const isOwner = user.id === OWNER_ID;
 
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma Dashboard</title><style>*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 50% -10%,rgba(255,255,255,.14),transparent 30%),#000;color:#fff;font-family:Inter,Arial,sans-serif}a{color:inherit}.wrap{width:min(1180px,92%);margin:34px auto}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.profile{display:flex;gap:14px;align-items:center}.avatar{width:58px;height:58px;border-radius:16px;object-fit:cover;border:1px solid #333}.card{border:1px solid #242424;border-radius:28px;background:linear-gradient(180deg,#101010,#070707);padding:24px;margin-bottom:18px}.muted,small{color:#999}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.stat{border:1px solid #242424;border-radius:20px;background:#080808;padding:20px}.num{font-size:40px;font-weight:950}.grid{display:grid;grid-template-columns:430px 1fr;gap:18px}.script{display:grid;grid-template-columns:1fr auto;gap:14px;border:1px solid #242424;border-radius:18px;background:#080808;padding:16px;margin:12px 0}.script b,.script small,.script code{display:block}.script code,.api{white-space:pre-wrap;word-break:break-all;background:#111;border:1px solid #2b2b2b;border-radius:12px;padding:10px;margin-top:10px;color:#eee}input,textarea{width:100%;background:#050505;color:#fff;border:1px solid #2b2b2b;border-radius:14px;padding:12px;margin:8px 0 14px;font:inherit}textarea{min-height:220px}.btn,button{display:inline-flex;align-items:center;justify-content:center;border:1px solid #fff;border-radius:999px;background:#fff;color:#000;padding:11px 16px;font-weight:900;text-decoration:none;cursor:pointer}.btn.dark{background:#000;color:#fff;border-color:#333}.danger{background:#220f0f;color:#ffb4ad;border-color:#5b2521}.check{display:flex;gap:10px;align-items:center;margin-bottom:14px}.check input{width:auto;margin:0}.hint{font-size:13px;color:#aaa}@media(max-width:900px){.grid,.stats,.script{grid-template-columns:1fr}.top{align-items:flex-start;gap:16px;flex-direction:column}}</style></head><body><div class="wrap"><div class="top"><div class="profile"><img class="avatar" src="${avatar}"><div><h1>Karma Dashboard</h1><p class="muted">Welcome, ${username}</p></div></div><div><a class="btn dark" href="/">Home</a> <a class="btn dark" href="/logout">Logout</a></div></div><div class="stats"><div class="stat"><div class="num">${scripts.length}</div><span class="muted">Scripts used</span></div><div class="stat"><div class="num">${remaining}</div><span class="muted">Slots left</span></div><div class="stat"><div class="num">1000</div><span class="muted">Max scripts</span></div></div><div class="card"><h2>Link API to Discord</h2><p class="muted">Copy this and run it in Discord:</p><div class="api">/link api key:${apiKey}</div></div><div class="grid"><section class="card"><h2>Upload Files & Obfuscate</h2><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="My Loader" required><label>Upload .lua/.txt file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><p class="hint">File contents will be placed into the source box below.</p><label>Source code</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("Karma Sources")' required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate with Kers0ne-style wrapper</label><button type="submit">Host Script</button></form></section><section class="card"><h2>Your Scripts</h2>${scriptRows}</section></div><div class="card"><h2>Obfuscate Features</h2><p><b>Protected By Kers0ne Obfuscator</b> banner, encoded wrapper, optional obfuscation on upload, and direct loadstring hosting.</p><p><code>/panel</code> <code>/apply</code> <code>/generatekey</code> <code>/hostscript</code> <code>/obfuscate</code> <code>/link api</code></p></div></div><script>document.getElementById('fileInput')?.addEventListener('change', async e => { const f=e.target.files[0]; if(!f) return; document.querySelector('input[name="name"]').value ||= f.name.replace(/\.(lua|txt)$/i,''); document.getElementById('codeBox').value = await f.text(); });</script></body></html>`;
+  const scriptLinks = scripts.length
+    ? scripts.map(s => `<a class="scriptLink ${selected?.id === s.id ? 'active' : ''}" href="/dashboard?tab=scripts&script=${s.id}"><b>${escapeHtml(s.name)}</b><small>${s.obfuscated ? 'Obfuscated' : 'Plain'} · ${escapeHtml(s.created_at)}</small></a>`).join('')
+    : `<p class="muted pad">No scripts yet.</p>`;
+
+  let content = '';
+  if (tab === 'scripts') {
+    content = selected ? `<div class="card"><h2>${escapeHtml(selected.name)}</h2><p class="muted">${selected.obfuscated ? 'Obfuscated build' : 'Plain build'} · ${escapeHtml(selected.created_at)}</p><h3>Loadstring</h3><code class="block">loadstring(game:HttpGet("${publicBaseUrl()}/script/${selected.id}.lua"))()</code><h3>Source Output</h3><textarea readonly>${escapeHtml(selected.code)}</textarea><form method="post" action="/dashboard/scripts/${selected.id}/delete"><button class="danger">Delete Script</button></form></div>` : `<div class="card"><h2>Scripts</h2><p class="muted">Create a script from the Sources page.</p></div>`;
+  } else if (tab === 'sources') {
+    content = `<div class="card"><h2>Sources</h2><p class="muted">Upload a .lua/.txt file or paste source. This creates a hosted script endpoint.</p><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="My Loader" required><label>Upload File</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><p class="hint">File contents will be placed into the source box below.</p><label>Source code</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("Karma Sources")' required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate with Kers0ne-style wrapper before hosting</label><button type="submit">Host Script</button></form></div>`;
+  } else if (tab === 'obfuscate') {
+    content = `<div class="card"><h2>Obfuscator</h2><p class="muted">Uses the Kers0ne-style protected wrapper: banner, randomized locals, rolling XOR, checksum, anti-tamper fallback.</p><form method="post" action="/dashboard/obfuscate"><label>Filename</label><input name="filename" value="obfuscated.lua"><label>Lua source</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("protect me")' required></textarea><button type="submit">Download Obfuscated Lua</button></form><div class="featureGrid"><div>Anti-tamper checksum</div><div>Rolling XOR byte encoding</div><div>Random local names</div><div>Protected By Kers0ne banner</div></div></div>`;
+  } else if (tab === 'how') {
+    content = `<div class="card"><h2>How It Works</h2><div class="stepsDash"><div><span>1</span><b>Upload source</b><p>Go to Sources, upload a Lua file or paste code.</p></div><div><span>2</span><b>Obfuscate or host</b><p>Enable obfuscation and create a hosted loadstring.</p></div><div><span>3</span><b>Link Discord</b><p>Run <code>/link api key:${apiKey}</code> in your server.</p></div><div><span>4</span><b>Generate keys</b><p>Use <code>/generatekey</code> and the panel for buyers.</p></div></div></div>`;
+  } else if (tab === 'tutorials') {
+    content = `<div class="card"><h2>Tutorials</h2><h3>Bot setup</h3><p>Invite the bot, then run <code>/panel title:Your Hub description:Use buttons below</code>.</p><h3>Script upload</h3><p>Open Sources, upload your Lua file, optionally obfuscate, and copy the loadstring from Scripts.</p><h3>Premium/redeem</h3><p>Give customers a code from the Owner panel. They redeem it on the Redeem page.</p></div>`;
+  } else if (tab === 'redeem') {
+    content = `<div class="card"><h2>Redeem Code</h2><p class="muted">Paste a premium/access code you received.</p><form method="post" action="/redeem"><input name="code" placeholder="XXXX-XXXX-XXXX" required><button type="submit">Redeem</button></form></div>`;
+  } else if (tab === 'discord') {
+    content = `<div class="card"><h2>Discord</h2><p class="muted">Add the bot to your server, then link your dashboard API key.</p><a class="btn" href="${botInvite}">Add Discord Bot To Your Server</a><h3>Link API</h3><code class="block">/link api key:${apiKey}</code><p class="muted">Your Discord server can store this API key using the /link command.</p></div>`;
+  } else if (tab === 'owner' && isOwner) {
+    const users = db.prepare('SELECT * FROM website_users ORDER BY last_login DESC LIMIT 50').all();
+    const codes = db.prepare('SELECT * FROM premium_codes ORDER BY created_at DESC LIMIT 50').all();
+    const banned = db.prepare('SELECT * FROM banned_hwids ORDER BY created_at DESC LIMIT 50').all();
+    content = `<div class="card"><h2>Owner Panel</h2><div class="stats"><div class="stat"><div class="num">${users.length}</div><span>Recent users</span></div><div class="stat"><div class="num">${scripts.length}</div><span>Your scripts</span></div><div class="stat"><div class="num">${banned.length}</div><span>Banned HWIDs</span></div></div><h3>Create Premium Code</h3><form method="post" action="/owner/codes"><input name="code" placeholder="PREMIUM-KEY-123" required><input name="plan" placeholder="premium" value="premium"><button>Create Code</button></form><h3>Ban HWID</h3><form method="post" action="/owner/ban-hwid"><input name="hwid" placeholder="HWID" required><input name="reason" placeholder="Reason"><button class="danger">Ban HWID</button></form><h3>Website Users</h3>${users.map(u=>`<div class="row"><b>${escapeHtml(u.global_name||u.username||u.id)}</b><small>${escapeHtml(u.id)} · last: ${escapeHtml(u.last_login)}</small></div>`).join('')}<h3>Premium Codes</h3>${codes.map(c=>`<div class="row"><b>${escapeHtml(c.code)}</b><small>${escapeHtml(c.plan)} · redeemed by ${escapeHtml(c.redeemed_by||'nobody')}</small></div>`).join('')}</div>`;
+  } else {
+    content = `<div class="card heroCard"><h2>Overview</h2><p class="muted">Manage scripts, sources, obfuscation, tutorials, Discord links, redeem codes, and owner tools from this dashboard.</p><div class="stats"><div class="stat"><div class="num">${scripts.length}</div><span>Scripts used</span></div><div class="stat"><div class="num">${remaining}</div><span>Slots left</span></div><div class="stat"><div class="num">1000</div><span>Max scripts</span></div></div><div class="anime"></div></div>`;
+  }
+
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma Dashboard</title><style>:root{--bg:#000;--side:#060606;--card:#0d0d0d;--line:#242424;--muted:#999}*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font-family:Inter,Arial,sans-serif}a{color:inherit;text-decoration:none}.layout{display:grid;grid-template-columns:300px 260px 1fr;min-height:100vh}.side{background:#060606;border-right:1px solid var(--line);padding:22px;position:sticky;top:0;height:100vh;overflow:auto}.brand{display:flex;gap:12px;align-items:center;border-bottom:1px solid #1c1c1c;padding-bottom:20px}.brand img,.avatar{width:48px;height:48px;border-radius:14px;object-fit:cover}.brand b{display:block}.brand small,.muted,small{color:var(--muted)}.nav{margin-top:20px}.nav a{display:flex;gap:12px;padding:12px;border-radius:14px;color:#ddd;font-weight:750}.nav a:hover,.nav a.active{background:#141414;color:#fff}.scriptsPane{background:#050505;border-right:1px solid var(--line);padding:20px;overflow:auto}.scriptLink{display:block;border:1px solid #222;background:#0a0a0a;border-radius:14px;padding:12px;margin-bottom:10px}.scriptLink.active{border-color:#fff}.main{padding:28px;min-width:0;position:relative;overflow:hidden}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}.profile{display:flex;gap:12px;align-items:center}.card{border:1px solid var(--line);border-radius:28px;background:linear-gradient(180deg,#101010,#070707);padding:24px;margin-bottom:18px;position:relative;z-index:1}.btn,button{display:inline-flex;border:1px solid #fff;background:#fff;color:#000;border-radius:999px;padding:11px 16px;font-weight:900;cursor:pointer}.btn.dark{background:#000;color:#fff;border-color:#333}.danger{background:#220f0f;color:#ffb4ad;border-color:#5b2521}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.stat{border:1px solid #252525;border-radius:18px;background:#080808;padding:18px}.num{font-size:38px;font-weight:950}input,textarea{width:100%;background:#050505;color:#fff;border:1px solid #2b2b2b;border-radius:14px;padding:12px;margin:8px 0 14px;font:inherit}textarea{min-height:260px}.check{display:flex;gap:10px;align-items:center}.check input{width:auto}.block{display:block;white-space:pre-wrap;word-break:break-all;padding:12px;margin:10px 0}.row{border:1px solid #222;border-radius:14px;padding:12px;margin:8px 0;background:#080808}.featureGrid,.stepsDash{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:16px}.featureGrid div,.stepsDash div{border:1px solid #222;border-radius:16px;background:#080808;padding:16px}.stepsDash span{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#fff;color:#000;font-weight:950}.anime{height:220px;border-radius:24px;border:1px solid #222;margin-top:22px;background:radial-gradient(circle at 30% 50%,rgba(255,255,255,.18),transparent 18%),radial-gradient(circle at 70% 50%,rgba(255,255,255,.11),transparent 20%),linear-gradient(120deg,#000,#111,#000);background-size:160% 160%;animation:movebg 6s infinite alternate;position:relative;overflow:hidden}.anime:after{content:'';position:absolute;inset:-40%;background:conic-gradient(from 0deg,transparent,rgba(255,255,255,.12),transparent 35%);animation:spin 8s linear infinite}@keyframes movebg{to{background-position:100% 60%}}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:1050px){.layout{grid-template-columns:1fr}.side,.scriptsPane{position:relative;height:auto}.stats,.featureGrid,.stepsDash{grid-template-columns:1fr}}</style></head><body><div class="layout"><aside class="side"><div class="brand"><img src="/assets/karma-logo.png"><div><b>Karma Sources</b><small>${username}</small></div></div><nav class="nav"><a class="${tab==='overview'?'active':''}" href="/dashboard">⌁ Overview</a><a class="${tab==='scripts'?'active':''}" href="/dashboard?tab=scripts">▦ Scripts</a><a class="${tab==='sources'?'active':''}" href="/dashboard?tab=sources">▧ Sources</a><a class="${tab==='obfuscate'?'active':''}" href="/dashboard?tab=obfuscate">🧩 Obfuscate</a><a class="${tab==='how'?'active':''}" href="/dashboard?tab=how">? How It Works</a><a class="${tab==='tutorials'?'active':''}" href="/dashboard?tab=tutorials">↯ Tutorials</a><a class="${tab==='redeem'?'active':''}" href="/dashboard?tab=redeem">▣ Redeem</a><a class="${tab==='discord'?'active':''}" href="/dashboard?tab=discord">○ Discord Bot</a>${isOwner?`<a class="${tab==='owner'?'active':''}" href="/dashboard?tab=owner">★ Owner Panel</a>`:''}<a href="/logout">↩ Logout</a></nav></aside><aside class="scriptsPane"><h3>Your Scripts</h3>${scriptLinks}<a class="btn" href="/dashboard?tab=sources">+ New Script</a></aside><main class="main"><div class="top"><div class="profile"><img class="avatar" src="${avatar}"><div><b>${username}</b><br><small>${scripts.length}/1000 scripts used</small></div></div><a class="btn dark" href="/">Home</a></div>${content}</main></div><script>document.getElementById('fileInput')?.addEventListener('change', async e => { const f=e.target.files[0]; if(!f) return; document.querySelector('input[name="name"]').value ||= f.name.replace(/\.(lua|txt)$/i,''); document.getElementById('codeBox').value = await f.text(); });</script></body></html>`;
 }
 
 function makeSession(user) {
@@ -1119,6 +1190,16 @@ function startApiServer() {
         return res.status(500).type('html').send('<h1>Could not fetch Discord user</h1>');
       }
 
+      db.prepare(`
+        INSERT INTO website_users (id, username, global_name, avatar, last_login)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+          username=excluded.username,
+          global_name=excluded.global_name,
+          avatar=excluded.avatar,
+          last_login=CURRENT_TIMESTAMP
+      `).run(user.id, user.username || null, user.global_name || null, user.avatar || null);
+
       const secure = publicBaseUrl().startsWith('https://') ? '; Secure' : '';
       res.setHeader('Set-Cookie', `kolsec_session=${encodeURIComponent(makeSession(user))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800${secure}`);
       return res.redirect('/dashboard');
@@ -1131,7 +1212,7 @@ function startApiServer() {
   app.get('/dashboard', (req, res) => {
     const user = requireDashboardUser(req, res);
     if (!user) return;
-    return res.type('html').send(discordDashboardPage(user));
+    return res.type('html').send(discordDashboardPage(user, req));
   });
 
   app.post('/dashboard/scripts', async (req, res) => {
@@ -1169,6 +1250,46 @@ function startApiServer() {
     return res.redirect('/dashboard');
   });
 
+  app.post('/dashboard/obfuscate', async (req, res) => {
+    const user = requireDashboardUser(req, res);
+    if (!user) return;
+    const code = String(req.body.code || '').slice(0, 4000);
+    const filename = String(req.body.filename || 'obfuscated.lua').replace(/[^a-zA-Z0-9_.-]/g, '_');
+    if (!code) return res.status(400).type('html').send('<h1>Missing code</h1><a href="/dashboard?tab=obfuscate">Back</a>');
+    const obfuscated = await callObfuscator(code);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename.endsWith('.lua') ? filename : `${filename}.lua`}"`);
+    return res.type('text/plain').send(obfuscated);
+  });
+
+  app.post('/redeem', (req, res) => {
+    const user = requireDashboardUser(req, res);
+    if (!user) return;
+    const code = String(req.body.code || '').trim();
+    const row = db.prepare('SELECT * FROM premium_codes WHERE code = ?').get(code);
+    if (!row) return res.status(404).type('html').send('<h1>Invalid code</h1><a href="/dashboard?tab=redeem">Back</a>');
+    if (row.redeemed_by && row.redeemed_by !== user.id) return res.status(403).type('html').send('<h1>Code already redeemed</h1><a href="/dashboard?tab=redeem">Back</a>');
+    db.prepare('UPDATE premium_codes SET redeemed_by = ?, redeemed_at = COALESCE(redeemed_at, CURRENT_TIMESTAMP) WHERE code = ?').run(user.id, code);
+    return res.type('html').send('<h1>Redeemed successfully</h1><p>Your premium code is now linked to your Discord account.</p><a href="/dashboard">Back to dashboard</a>');
+  });
+
+  app.post('/owner/codes', (req, res) => {
+    const user = requireDashboardUser(req, res);
+    if (!user || user.id !== OWNER_ID) return;
+    const code = String(req.body.code || '').trim();
+    const plan = String(req.body.plan || 'premium').trim();
+    if (code) db.prepare('INSERT OR IGNORE INTO premium_codes (code, plan, created_by) VALUES (?, ?, ?)').run(code, plan, user.id);
+    return res.redirect('/dashboard?tab=owner');
+  });
+
+  app.post('/owner/ban-hwid', (req, res) => {
+    const user = requireDashboardUser(req, res);
+    if (!user || user.id !== OWNER_ID) return;
+    const hwid = String(req.body.hwid || '').trim();
+    const reason = String(req.body.reason || '').trim();
+    if (hwid) db.prepare('INSERT OR REPLACE INTO banned_hwids (hwid, reason, banned_by) VALUES (?, ?, ?)').run(hwid, reason, user.id);
+    return res.redirect('/dashboard?tab=owner');
+  });
+
   app.get('/logout', (req, res) => {
     res.setHeader('Set-Cookie', 'kolsec_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
     return res.redirect('/');
@@ -1204,6 +1325,11 @@ function startApiServer() {
 
     if (!script_id || !key || !hwid || !apiSecret) {
       return res.status(400).json({ ok: false, message: 'Missing script_id, key, hwid, or X-API-Secret' });
+    }
+
+    const banned = db.prepare('SELECT * FROM banned_hwids WHERE hwid = ?').get(String(hwid));
+    if (banned) {
+      return res.status(403).json({ ok: false, message: 'HWID banned', reason: banned.reason || 'No reason provided' });
     }
 
     const script = db.prepare('SELECT * FROM scripts WHERE id = ?').get(script_id);
