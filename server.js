@@ -60,20 +60,15 @@ const commands = [
     .setDescription('Show Kolsec service/database status'),
 
   new SlashCommandBuilder()
-    .setName('setup')
-    .setDescription('Set up the Kolsec panel')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addRoleOption(o => o.setName('admin_role').setDescription('Role allowed to manage Kolsec').setRequired(true))
-    .addRoleOption(o => o.setName('customer_role').setDescription('Buyer role given after redeeming').setRequired(true))
-    .addChannelOption(o => o.setName('panel_channel').setDescription('Channel to post the panel').addChannelTypes(ChannelType.GuildText).setRequired(true))
-    .addChannelOption(o => o.setName('log_channel').setDescription('Logs channel').addChannelTypes(ChannelType.GuildText).setRequired(false))
-    .addStringOption(o => o.setName('title').setDescription('Panel title, example: Drizzy Hub').setRequired(false).setMaxLength(100))
-    .addStringOption(o => o.setName('description').setDescription('Panel description').setRequired(false).setMaxLength(500)),
-
-  new SlashCommandBuilder()
     .setName('panel')
-    .setDescription('Repost the Kolsec button panel')
-    .addChannelOption(o => o.setName('channel').setDescription('Where to post the panel').addChannelTypes(ChannelType.GuildText).setRequired(false)),
+    .setDescription('Post/configure the Kolsec button panel')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addStringOption(o => o.setName('title').setDescription('Panel title, example: Drizzy Hub').setRequired(true).setMaxLength(100))
+    .addStringOption(o => o.setName('description').setDescription('Panel description').setRequired(true).setMaxLength(500))
+    .addChannelOption(o => o.setName('channel').setDescription('Where to post the panel').addChannelTypes(ChannelType.GuildText).setRequired(false))
+    .addRoleOption(o => o.setName('admin_role').setDescription('Role allowed to manage Kolsec').setRequired(false))
+    .addRoleOption(o => o.setName('customer_role').setDescription('Buyer role given after redeeming').setRequired(false))
+    .addChannelOption(o => o.setName('log_channel').setDescription('Logs channel').addChannelTypes(ChannelType.GuildText).setRequired(false)),
 
   new SlashCommandBuilder()
     .setName('apply')
@@ -95,13 +90,6 @@ const commands = [
     .setName('generatekey')
     .setDescription('Generate license keys')
     .addStringOption(o => o.setName('script_id').setDescription('Script ID from /apply or /createscript').setRequired(true))
-    .addIntegerOption(o => o.setName('days').setDescription('Days until expiry, 0 = lifetime').setRequired(true).setMinValue(0).setMaxValue(3650))
-    .addIntegerOption(o => o.setName('quantity').setDescription('Number of keys').setRequired(false).setMinValue(1).setMaxValue(20)),
-
-  new SlashCommandBuilder()
-    .setName('genkey')
-    .setDescription('Alias for /generatekey')
-    .addStringOption(o => o.setName('script_id').setDescription('Script ID').setRequired(true))
     .addIntegerOption(o => o.setName('days').setDescription('Days until expiry, 0 = lifetime').setRequired(true).setMinValue(0).setMaxValue(3650))
     .addIntegerOption(o => o.setName('quantity').setDescription('Number of keys').setRequired(false).setMinValue(1).setMaxValue(20)),
 
@@ -188,6 +176,13 @@ async function deployCommands() {
   if (GUILD_ID) {
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
     console.log(`Deployed ${commands.length} commands to guild ${GUILD_ID}.`);
+
+    // Remove old global commands like /setup and /genkey so they stop showing.
+    // Set CLEAR_GLOBAL_COMMANDS=false if you intentionally use global commands.
+    if (process.env.CLEAR_GLOBAL_COMMANDS !== 'false') {
+      await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
+      console.log('Cleared global commands.');
+    }
   } else {
     await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
     console.log(`Deployed ${commands.length} global commands. They can take up to 1 hour to show.`);
@@ -499,12 +494,11 @@ async function handleCommand(interaction) {
       ephemeral: true,
       content: [
         '**Kolsec Commands**',
-        '`/setup` - set up roles, logs, and the panel',
-        '`/panel` - repost the button panel',
+        '`/panel title description` - configure/post the button panel',
         '`/apply` - create a script, host it, and get a loadstring',
         '`/createscript` - create a script/API secret only',
         '`/scripts` - list scripts',
-        '`/generatekey` / `/genkey` - generate license keys',
+        '`/generatekey` - generate license keys',
         '`/redeem` - redeem a key',
         '`/keyinfo` - view key info',
         '`/mykeys` - view your keys',
@@ -530,45 +524,53 @@ async function handleCommand(interaction) {
     return interaction.reply({ ephemeral: true, content: `Kolsec is online.\nScripts: **${scriptCount}**\nKeys: **${keyCount}**\nHosted scripts: **${hostedCount}**\nWebsite: ${publicBaseUrl()}` });
   }
 
-  if (commandName === 'setup') {
-    const adminRole = interaction.options.getRole('admin_role', true);
-    const customerRole = interaction.options.getRole('customer_role', true);
-    const panelChannel = interaction.options.getChannel('panel_channel', true);
-    const logChannel = interaction.options.getChannel('log_channel', false);
-    const panelTitle = interaction.options.getString('title') || 'Kolsec Hub';
-    const panelDescription = interaction.options.getString('description') || 'Use the buttons below to manage your key';
-
-    upsertSettings(interaction.guildId, {
-      admin_role_id: adminRole.id,
-      customer_role_id: customerRole.id,
-      log_channel_id: logChannel ? logChannel.id : null,
-      panel_channel_id: panelChannel.id,
-      panel_title: panelTitle,
-      panel_description: panelDescription
-    });
-
-    const panelMessage = await panelChannel.send({ embeds: [panelEmbed(interaction.guildId)], components: panelButtons() });
-    upsertSettings(interaction.guildId, { panel_message_id: panelMessage.id });
-
-    await interaction.reply({ ephemeral: true, content: `Setup complete. Panel posted in ${panelChannel}. Title: **${panelTitle}**` });
-    await logGuild(interaction.guild, `⚙️ License panel setup by <@${interaction.user.id}>.`);
-    return;
+  if (commandName === 'setup' || commandName === 'genkey') {
+    return interaction.reply({ ephemeral: true, content: commandName === 'setup' ? 'This command was removed. Use `/panel title description` now.' : 'This command was removed. Use `/generatekey` now.' });
   }
 
   if (commandName === 'panel') {
     if (!requireAdmin(interaction)) {
       return interaction.reply({ ephemeral: true, content: 'You need Administrator or the configured admin role to use this command.' });
     }
+
     const settings = getSettings(interaction.guildId);
     const channel = interaction.options.getChannel('channel', false) || (settings?.panel_channel_id ? await interaction.guild.channels.fetch(settings.panel_channel_id).catch(() => null) : interaction.channel);
-    if (!channel || !channel.isTextBased()) return interaction.reply({ ephemeral: true, content: 'Panel channel not found.' });
-    const panelMessage = await channel.send({ embeds: [panelEmbed(interaction.guildId)], components: panelButtons() });
-    upsertSettings(interaction.guildId, { panel_channel_id: channel.id, panel_message_id: panelMessage.id });
-    await interaction.reply({ ephemeral: true, content: `Panel posted in ${channel}.` });
-    return;
+    const panelTitle = interaction.options.getString('title', true);
+    const panelDescription = interaction.options.getString('description', true);
+    const adminRole = interaction.options.getRole('admin_role', false);
+    const customerRole = interaction.options.getRole('customer_role', false);
+    const logChannel = interaction.options.getChannel('log_channel', false);
+
+    if (!channel || !channel.isTextBased()) {
+      return interaction.reply({ ephemeral: true, content: 'Panel channel not found.' });
+    }
+
+    const patch = {
+      panel_channel_id: channel.id,
+      panel_title: panelTitle,
+      panel_description: panelDescription
+    };
+    if (adminRole) patch.admin_role_id = adminRole.id;
+    if (customerRole) patch.customer_role_id = customerRole.id;
+    if (logChannel) patch.log_channel_id = logChannel.id;
+    upsertSettings(interaction.guildId, patch);
+
+    const payload = { embeds: [panelEmbed(interaction.guildId)], components: panelButtons() };
+
+    // If posting to the current channel, the interaction reply IS the panel.
+    // This prevents the old behavior of sending the panel + a second confirmation message.
+    if (channel.id === interaction.channelId) {
+      const panelMessage = await interaction.reply({ ...payload, fetchReply: true });
+      upsertSettings(interaction.guildId, { panel_message_id: panelMessage.id });
+      return;
+    }
+
+    const panelMessage = await channel.send(payload);
+    upsertSettings(interaction.guildId, { panel_message_id: panelMessage.id });
+    return interaction.reply({ ephemeral: true, content: `Panel posted in ${channel}.` });
   }
 
-  const adminCommands = ['generatekey', 'apply', 'hostscript', 'resethwid', 'createscript', 'scripts', 'genkey', 'revoke', 'extendkey', 'deletekey', 'panel', 'loader', 'obfuscate'];
+  const adminCommands = ['generatekey', 'apply', 'hostscript', 'resethwid', 'createscript', 'scripts', 'revoke', 'extendkey', 'deletekey', 'panel', 'loader', 'obfuscate'];
   if (adminCommands.includes(commandName) && !requireAdmin(interaction)) {
     await interaction.reply({ ephemeral: true, content: 'You need Administrator or the configured admin role to use this command.' });
     return;
@@ -588,7 +590,7 @@ async function handleCommand(interaction) {
     return interaction.reply({ ephemeral: true, content: scripts.map(s => `**${s.name}**\nID: \`${s.id}\`\nSecret: \`${s.api_secret_preview}\``).join('\n\n') });
   }
 
-  if (commandName === 'generatekey' || commandName === 'genkey') {
+  if (commandName === 'generatekey') {
     const scriptId = interaction.options.getString('script_id', true);
     const days = interaction.options.getInteger('days', true);
     const quantity = interaction.options.getInteger('quantity') || 1;
@@ -815,7 +817,7 @@ async function sendKeyInfo(interaction, key) {
 
 async function giveBuyerRole(interaction) {
   const settings = getSettings(interaction.guildId);
-  if (!settings || !settings.customer_role_id) return interaction.reply({ ephemeral: true, content: 'Buyer role is not configured. Run `/setup` first.' });
+  if (!settings || !settings.customer_role_id) return interaction.reply({ ephemeral: true, content: 'Buyer role is not configured. Run `/panel title description` first and include customer_role.' });
 
   const owned = db.prepare('SELECT * FROM licenses WHERE guild_id = ? AND discord_user_id = ? AND revoked = 0 LIMIT 1').get(interaction.guildId, interaction.user.id);
   if (!owned) return interaction.reply({ ephemeral: true, content: 'You need to redeem a key first.' });
@@ -919,10 +921,10 @@ function kolsecHomePage() {
   <main>
     <section class="hero"><div class="wrap"><div class="pill">Discord OAuth enabled · Lua protection</div><h1>Lua Whitelist & Script Protection</h1><p>Kolsec helps you protect Lua scripts, generate whitelist keys, reset HWIDs, host loadstrings, and manage access straight from Discord.</p><div class="actions"><a class="btn" href="/login">Get Started with Discord</a><a class="btn dark" href="#how">How it works</a></div><div class="preview"><div class="screen"><div class="top"><b>Kolsec Dashboard</b><span>online</span></div><div class="rows"><div class="tile"><b>${scriptCount}</b><small>Scripts created</small></div><div class="tile"><b>${keyCount}</b><small>License keys</small></div><div class="tile"><b>${hostedCount}</b><small>Hosted loadstrings</small></div></div></div></div></div></section>
     <section id="features" class="section"><div class="wrap"><div class="title"><div class="kicker">Powerful features</div><h2>Everything you need to manage your scripts automatically.</h2><p>Built for Discord communities that sell or distribute Lua scripts.</p></div><div class="features"><div class="card"><div class="icon">🔐</div><h3>Whitelist Keys</h3><p>Generate expiring or lifetime keys and let users redeem from your panel.</p></div><div class="card"><div class="icon">🖥️</div><h3>HWID Locking</h3><p>Bind each key to the first device and reset it when support is needed.</p></div><div class="card"><div class="icon">⚡</div><h3>Hosted Loadstrings</h3><p>Host scripts on Render and serve clean loadstrings at /script/id.lua.</p></div><div class="card"><div class="icon">🤖</div><h3>Discord Bot</h3><p>Panels, buttons, logs, buyer roles, key info, and admin commands.</p></div><div class="card"><div class="icon">🧩</div><h3>Obfuscation</h3><p>Use the local Kers0ne-style wrapper when applying or hosting Lua.</p></div><div class="card"><div class="icon">📡</div><h3>REST API</h3><p>Verify keys from loaders using a protected verification endpoint.</p></div></div></div></section>
-    <section id="how" class="section"><div class="wrap"><div class="title"><div class="kicker">How it works</div><h2>Set up once. Sell forever.</h2></div><div class="steps"><div class="step"><span>1</span><h3>Run /setup</h3><p>Post the Kolsec panel and configure roles/logs.</p></div><div class="step"><span>2</span><h3>Run /apply</h3><p>Create a script, host the loader, and save the API secret.</p></div><div class="step"><span>3</span><h3>Generate keys</h3><p>Users redeem keys and your loader verifies access.</p></div></div></div></section>
+    <section id="how" class="section"><div class="wrap"><div class="title"><div class="kicker">How it works</div><h2>Set up once. Sell forever.</h2></div><div class="steps"><div class="step"><span>1</span><h3>Run /panel</h3><p>Post the Kolsec panel with your custom title and description.</p></div><div class="step"><span>2</span><h3>Run /apply</h3><p>Create a script, host the loader, and save the API secret.</p></div><div class="step"><span>3</span><h3>Generate keys</h3><p>Users redeem keys and your loader verifies access.</p></div></div></div></section>
     <section class="section"><div class="wrap"><div class="stats"><div class="stat"><div class="num">${scriptCount}</div><div class="label">scripts</div></div><div class="stat"><div class="num">${keyCount}</div><div class="label">keys</div></div><div class="stat"><div class="num">${hostedCount}</div><div class="label">hosted scripts</div></div></div></div></section>
     <section id="pricing" class="section"><div class="wrap"><div class="title"><div class="kicker">Pricing</div><h2>Simple plans. Real protection.</h2></div><div class="pricing"><div class="price"><h3>Citizen</h3><div class="money">$0</div><ul><li>Discord panel</li><li>Key generation</li><li>HWID resets</li><li>Hosted loadstrings</li></ul><a class="btn dark" href="/login">Get Started</a></div><div class="price hot"><h3>Royal</h3><div class="money">$3<span style="font-size:18px">/mo</span></div><ul><li>Unlimited hosting</li><li>Obfuscation workflow</li><li>Priority support</li><li>Advanced automation</li></ul><a class="btn" href="/login">Upgrade</a></div></div></div></section>
-    <section id="commands" class="section"><div class="wrap"><div class="cta"><h2>Ready to protect your scripts?</h2><p>Sign in with Discord to start.</p><div class="actions"><a class="btn" href="/login">Get Started</a><a class="btn dark" href="/health">Status</a></div><p class="cmds"><code>/setup</code> <code>/apply</code> <code>/generatekey</code> <code>/hostscript</code> <code>/resethwid</code> <code>/redeem</code> <code>/keyinfo</code></p></div></div></section>
+    <section id="commands" class="section"><div class="wrap"><div class="cta"><h2>Ready to protect your scripts?</h2><p>Sign in with Discord to start.</p><div class="actions"><a class="btn" href="/login">Get Started</a><a class="btn dark" href="/health">Status</a></div><p class="cmds"><code>/panel</code> <code>/apply</code> <code>/generatekey</code> <code>/hostscript</code> <code>/resethwid</code> <code>/redeem</code> <code>/keyinfo</code></p></div></div></section>
   </main>
   <div class="wrap footer"><span>Kolsec © ${new Date().getFullYear()}</span><span>Lua Whitelist & Script Protection</span></div>
 </body>
@@ -938,7 +940,7 @@ function discordDashboardPage(user) {
     ? scripts.map(s => `<div class="script"><div><b>${escapeHtml(s.name)}</b><small>${s.obfuscated ? 'Obfuscated' : 'Plain'} · ${escapeHtml(s.created_at)}</small><code>loadstring(game:HttpGet("${publicBaseUrl()}/script/${s.id}.lua"))()</code></div><form method="post" action="/dashboard/scripts/${s.id}/delete"><button>Delete</button></form></div>`).join('')
     : `<p class="muted">No scripts yet. Create your first hosted loadstring below.</p>`;
 
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kolsec Dashboard</title><style>*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font-family:Inter,Arial,sans-serif}a{color:inherit}.wrap{width:min(1120px,92%);margin:38px auto}.nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.card{border:1px solid #242424;border-radius:28px;background:#080808;padding:26px;margin-bottom:18px}.profile{display:flex;align-items:center;gap:16px}.avatar{width:70px;height:70px;border-radius:50%;border:1px solid #333}.muted,small{color:#999}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.stat{border:1px solid #242424;border-radius:22px;background:#050505;padding:20px}.num{font-size:38px;font-weight:950}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.script{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:start;border:1px solid #222;border-radius:18px;padding:16px;margin:12px 0;background:#050505}.script b,.script small,.script code{display:block}.script code{white-space:pre-wrap;word-break:break-all;background:#111;border:1px solid #2a2a2a;border-radius:12px;padding:10px;margin-top:10px;color:#eee}input,textarea{width:100%;background:#050505;color:#fff;border:1px solid #2a2a2a;border-radius:14px;padding:12px;margin:8px 0 14px;font:inherit}textarea{min-height:180px}button,.btn{display:inline-flex;border:1px solid #fff;border-radius:999px;background:#fff;color:#000;padding:11px 16px;font-weight:850;text-decoration:none;cursor:pointer}.btn.dark,button.dark{background:#000;color:#fff;border-color:#333}.check{display:flex;gap:10px;align-items:center;margin-bottom:14px}.check input{width:auto;margin:0}@media(max-width:800px){.grid,.stats,.script{grid-template-columns:1fr}}</style></head><body><div class="wrap"><div class="nav"><h1>Kolsec Dashboard</h1><div><a class="btn dark" href="${DISCORD_INVITE_URL}">Connect Discord</a> <a class="btn dark" href="/logout">Logout</a></div></div><div class="card profile">${avatar ? `<img class="avatar" src="${avatar}" alt="avatar">` : ''}<div><h2>Welcome, ${username}</h2><p class="muted">Discord connected. You can host up to <b>${MAX_WEB_SCRIPTS_PER_USER}</b> scripts.</p></div></div><div class="stats"><div class="stat"><div class="num">${scripts.length}</div><div class="muted">Scripts used</div></div><div class="stat"><div class="num">${remaining}</div><div class="muted">Slots left</div></div><div class="stat"><div class="num">1000</div><div class="muted">Max scripts</div></div></div><div class="grid"><div class="card"><h2>Create Script</h2><form method="post" action="/dashboard/scripts"><label>Name</label><input name="name" maxlength="80" placeholder="My Loader" required><label>Lua Code</label><textarea name="code" maxlength="4000" placeholder='print("Kolsec")' required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate with Kers0ne-style wrapper</label><button type="submit">Host Script</button></form></div><div class="card"><h2>Your Scripts</h2>${scriptRows}</div></div><div class="card"><h2>Discord Commands</h2><p><code>/setup</code> <code>/apply</code> <code>/generatekey</code> <code>/hostscript</code> <code>/resethwid</code></p><a class="btn" href="/">Back Home</a></div></div></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kolsec Dashboard</title><style>*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font-family:Inter,Arial,sans-serif}a{color:inherit}.wrap{width:min(1120px,92%);margin:38px auto}.nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.card{border:1px solid #242424;border-radius:28px;background:#080808;padding:26px;margin-bottom:18px}.profile{display:flex;align-items:center;gap:16px}.avatar{width:70px;height:70px;border-radius:50%;border:1px solid #333}.muted,small{color:#999}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.stat{border:1px solid #242424;border-radius:22px;background:#050505;padding:20px}.num{font-size:38px;font-weight:950}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.script{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:start;border:1px solid #222;border-radius:18px;padding:16px;margin:12px 0;background:#050505}.script b,.script small,.script code{display:block}.script code{white-space:pre-wrap;word-break:break-all;background:#111;border:1px solid #2a2a2a;border-radius:12px;padding:10px;margin-top:10px;color:#eee}input,textarea{width:100%;background:#050505;color:#fff;border:1px solid #2a2a2a;border-radius:14px;padding:12px;margin:8px 0 14px;font:inherit}textarea{min-height:180px}button,.btn{display:inline-flex;border:1px solid #fff;border-radius:999px;background:#fff;color:#000;padding:11px 16px;font-weight:850;text-decoration:none;cursor:pointer}.btn.dark,button.dark{background:#000;color:#fff;border-color:#333}.check{display:flex;gap:10px;align-items:center;margin-bottom:14px}.check input{width:auto;margin:0}@media(max-width:800px){.grid,.stats,.script{grid-template-columns:1fr}}</style></head><body><div class="wrap"><div class="nav"><h1>Kolsec Dashboard</h1><div><a class="btn dark" href="${DISCORD_INVITE_URL}">Connect Discord</a> <a class="btn dark" href="/logout">Logout</a></div></div><div class="card profile">${avatar ? `<img class="avatar" src="${avatar}" alt="avatar">` : ''}<div><h2>Welcome, ${username}</h2><p class="muted">Discord connected. You can host up to <b>${MAX_WEB_SCRIPTS_PER_USER}</b> scripts.</p></div></div><div class="stats"><div class="stat"><div class="num">${scripts.length}</div><div class="muted">Scripts used</div></div><div class="stat"><div class="num">${remaining}</div><div class="muted">Slots left</div></div><div class="stat"><div class="num">1000</div><div class="muted">Max scripts</div></div></div><div class="grid"><div class="card"><h2>Create Script</h2><form method="post" action="/dashboard/scripts"><label>Name</label><input name="name" maxlength="80" placeholder="My Loader" required><label>Lua Code</label><textarea name="code" maxlength="4000" placeholder='print("Kolsec")' required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate with Kers0ne-style wrapper</label><button type="submit">Host Script</button></form></div><div class="card"><h2>Your Scripts</h2>${scriptRows}</div></div><div class="card"><h2>Discord Commands</h2><p><code>/panel</code> <code>/apply</code> <code>/generatekey</code> <code>/hostscript</code> <code>/resethwid</code></p><a class="btn" href="/">Back Home</a></div></div></body></html>`;
 }
 
 function makeSession(user) {
