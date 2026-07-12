@@ -1246,7 +1246,6 @@ async function handleCommand(interaction) {
       createdBy: interaction.user.id
     });
 
-    const base = publicBaseUrl();
     const loadstring = makeLoaderSnippet(hosted.id);
 
     await interaction.editReply({
@@ -1406,8 +1405,26 @@ async function handleCommand(interaction) {
     const scriptId = interaction.options.getString('script_id', true);
     const script = db.prepare('SELECT * FROM scripts WHERE id = ? AND guild_id = ?').get(scriptId, interaction.guildId);
     if (!script) return interaction.reply({ ephemeral: true, content: 'Invalid script ID.' });
-    const apiPort = process.env.PORT || process.env.API_PORT || 3000;
-    const example = `-- Generic Lua example. Change request/http_request for your environment.\nlocal key = "PASTE_USER_KEY"\nlocal hwid = "PUT_HWID_HERE"\nlocal apiUrl = "https://YOUR-RENDER-URL.onrender.com/api/verify"\n\nlocal body = '{"script_id":"${scriptId}","key":"' .. key .. '","hwid":"' .. hwid .. '"}'`\n\nlocal res = request({\n  Url = apiUrl,\n  Method = "POST",\n  Headers = {\n    ["Content-Type"] = "application/json",\n    ["X-API-Secret"] = "PASTE_SCRIPT_API_SECRET"\n  },\n  Body = body\n})\n\nprint(res.Body)`;
+    
+    const example = `-- Generic Lua example. Change request/http_request for your environment.
+local key = "PASTE_USER_KEY"
+local hwid = "PUT_HWID_HERE"
+local apiUrl = "https://YOUR-RENDER-URL.onrender.com/api/verify"
+
+local body = '{"script_id":"${scriptId}","key":"' .. key .. '","hwid":"' .. hwid .. '"}'
+
+local res = request({
+  Url = apiUrl,
+  Method = "POST",
+  Headers = {
+    ["Content-Type"] = "application/json",
+    ["X-API-Secret"] = "PASTE_SCRIPT_API_SECRET"
+  },
+  Body = body
+})
+
+print(res.Body)`;
+    
     return interaction.reply({ ephemeral: true, content: `\`\`\`lua\n${example}\n\`\`\`` });
   }
 }
