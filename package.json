@@ -1,12 +1,10 @@
 {
-  "name": "polsec-like-bot",
+  "name": "kolsec-bot",
   "version": "1.0.0",
-  "description": "Polsec-like Discord licensing bot with setup panels",
-  "main": "src/index.js",
+  "description": "Kolsec Discord licensing bot, website, hosted loadstrings, and obfuscation commands",
+  "main": "server.js",
   "scripts": {
-    "start": "node src/index.js",
-    "deploy": "node src/deploy-commands.js",
-    "dev": "node --watch src/index.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.9.1",
