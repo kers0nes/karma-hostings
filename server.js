@@ -8,6 +8,7 @@ const Database = require('better-sqlite3');
 const crypto = require('crypto');
 const {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
@@ -29,7 +30,9 @@ const {
   CLIENT_ID,
   GUILD_ID,
   DATABASE_PATH = './data.sqlite',
-  GLOBAL_API_TOKEN
+  GLOBAL_API_TOKEN,
+  PUBLIC_BASE_URL,
+  OBFUSCATOR_API_URL = 'https://leakd-detector.up.railway.app'
 } = process.env;
 
 if (!DISCORD_TOKEN) {
@@ -87,7 +90,20 @@ const commands = [
   new SlashCommandBuilder()
     .setName('loader')
     .setDescription('Get a Lua verification loader example')
-    .addStringOption(o => o.setName('script_id').setDescription('Script ID').setRequired(true))
+    .addStringOption(o => o.setName('script_id').setDescription('Script ID').setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('hostscript')
+    .setDescription('Host Lua code on the Render website and get a loadstring')
+    .addStringOption(o => o.setName('name').setDescription('Script name').setRequired(true).setMaxLength(80))
+    .addStringOption(o => o.setName('code').setDescription('Lua code to host, max 4000 chars').setRequired(true).setMaxLength(4000))
+    .addBooleanOption(o => o.setName('obfuscate').setDescription('Run the code through your obfuscator API before hosting')),
+
+  new SlashCommandBuilder()
+    .setName('obfuscate')
+    .setDescription('Obfuscate Lua code using your obfuscator API')
+    .addStringOption(o => o.setName('code').setDescription('Lua code to obfuscate, max 4000 chars').setRequired(true).setMaxLength(4000))
+    .addStringOption(o => o.setName('filename').setDescription('Output filename').setRequired(false).setMaxLength(80))
 ].map(c => c.toJSON());
 
 async function deployCommands() {
@@ -146,9 +162,20 @@ CREATE TABLE IF NOT EXISTS licenses (
   redeemed_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS hosted_scripts (
+  id TEXT PRIMARY KEY,
+  guild_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  code TEXT NOT NULL,
+  obfuscated INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_scripts_guild ON scripts(guild_id);
 CREATE INDEX IF NOT EXISTS idx_licenses_script ON licenses(script_id);
 CREATE INDEX IF NOT EXISTS idx_licenses_user ON licenses(discord_user_id);
+CREATE INDEX IF NOT EXISTS idx_hosted_scripts_guild ON hosted_scripts(guild_id);
 `);
 
 function hashSecret(secret) {
@@ -213,6 +240,54 @@ function createScript({ guildId, name, createdBy }) {
   `).run(id, guildId, name, hashSecret(apiSecret), `${apiSecret.slice(0, 8)}...${apiSecret.slice(-6)}`, createdBy);
 
   return { id, name, apiSecret };
+}
+
+function createHostedScript({ guildId, name, code, obfuscated, createdBy }) {
+  const id = makeId('host');
+  db.prepare(`
+    INSERT INTO hosted_scripts (id, guild_id, name, code, obfuscated, created_by)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(id, guildId, name, code, obfuscated ? 1 : 0, createdBy);
+  return { id, name, code, obfuscated: Boolean(obfuscated) };
+}
+
+function publicBaseUrl() {
+  if (PUBLIC_BASE_URL) return PUBLIC_BASE_URL.replace(/\/$/, '');
+  if (process.env.RENDER_EXTERNAL_URL) return process.env.RENDER_EXTERNAL_URL.replace(/\/$/, '');
+  return `http://localhost:${process.env.PORT || process.env.API_PORT || 3000}`;
+}
+
+async function callObfuscator(luaCode) {
+  const base = OBFUSCATOR_API_URL.replace(/\/$/, '');
+  const urls = [base, `${base}/obfuscate`, `${base}/api/obfuscate`];
+  let lastError = null;
+
+  for (const url of urls) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: luaCode, script: luaCode, source: luaCode })
+      });
+
+      const text = await response.text();
+      if (!response.ok) {
+        lastError = new Error(`${url} returned ${response.status}: ${text.slice(0, 300)}`);
+        continue;
+      }
+
+      try {
+        const json = JSON.parse(text);
+        return json.obfuscated || json.code || json.result || json.output || json.data || text;
+      } catch {
+        return text;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('Obfuscator API failed.');
 }
 
 function verifyAdmin(member, settings) {
@@ -337,7 +412,7 @@ async function handleCommand(interaction) {
     return;
   }
 
-  const adminCommands = ['createscript', 'scripts', 'genkey', 'revoke', 'keyinfo', 'loader'];
+  const adminCommands = ['createscript', 'scripts', 'genkey', 'revoke', 'keyinfo', 'loader', 'hostscript', 'obfuscate'];
   if (adminCommands.includes(commandName) && !requireAdmin(interaction)) {
     await interaction.reply({ ephemeral: true, content: 'You need Administrator or the configured admin role to use this command.' });
     return;
@@ -408,6 +483,60 @@ async function handleCommand(interaction) {
 
   if (commandName === 'mykeys') return sendMyKeys(interaction, interaction.user.id);
 
+  if (commandName === 'obfuscate') {
+    const code = interaction.options.getString('code', true);
+    const filename = (interaction.options.getString('filename') || 'obfuscated.lua').replace(/[^a-zA-Z0-9_.-]/g, '_');
+
+    await interaction.deferReply({ ephemeral: true });
+
+    try {
+      const obfuscated = await callObfuscator(code);
+      const attachment = new AttachmentBuilder(Buffer.from(String(obfuscated), 'utf8'), { name: filename.endsWith('.lua') ? filename : `${filename}.lua` });
+      await interaction.editReply({ content: 'Obfuscated successfully.', files: [attachment] });
+      await logGuild(interaction.guild, `🧩 Code obfuscated by <@${interaction.user.id}>.`);
+    } catch (error) {
+      await interaction.editReply({ content: `Obfuscator API failed: ${error.message}` });
+    }
+    return;
+  }
+
+  if (commandName === 'hostscript') {
+    const name = interaction.options.getString('name', true);
+    const originalCode = interaction.options.getString('code', true);
+    const shouldObfuscate = interaction.options.getBoolean('obfuscate') || false;
+
+    await interaction.deferReply({ ephemeral: true });
+
+    let finalCode = originalCode;
+    if (shouldObfuscate) {
+      try {
+        finalCode = await callObfuscator(originalCode);
+      } catch (error) {
+        await interaction.editReply({ content: `Obfuscator API failed, script was not hosted: ${error.message}` });
+        return;
+      }
+    }
+
+    const hosted = createHostedScript({
+      guildId: interaction.guildId,
+      name,
+      code: String(finalCode),
+      obfuscated: shouldObfuscate,
+      createdBy: interaction.user.id
+    });
+
+    const base = publicBaseUrl();
+    const rawUrl = `${base}/script/${hosted.id}.lua`;
+    const loadstringUrl = `${base}/loadstring/${hosted.id}`;
+    const loadstring = `loadstring(game:HttpGet("${rawUrl}"))()`;
+
+    await interaction.editReply({
+      content: `Hosted **${name}** ${shouldObfuscate ? '(obfuscated)' : ''}.\n\nRaw script URL:\n${rawUrl}\n\nLoadstring URL:\n${loadstringUrl}\n\nLoadstring:\n\`\`\`lua\n${loadstring}\n\`\`\``
+    });
+    await logGuild(interaction.guild, `🌐 Script \`${name}\` hosted by <@${interaction.user.id}>. ID: \`${hosted.id}\``);
+    return;
+  }
+
   if (commandName === 'loader') {
     const scriptId = interaction.options.getString('script_id', true);
     const script = db.prepare('SELECT * FROM scripts WHERE id = ? AND guild_id = ?').get(scriptId, interaction.guildId);
@@ -458,13 +587,63 @@ async function handleModal(interaction) {
   }
 }
 
+function kolsecHomePage() {
+  const scriptCount = db.prepare('SELECT COUNT(*) AS count FROM scripts').get().count;
+  const keyCount = db.prepare('SELECT COUNT(*) AS count FROM licenses').get().count;
+  const hostedCount = db.prepare('SELECT COUNT(*) AS count FROM hosted_scripts').get().count;
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kolsec - Lua Whitelist & Script Protection</title>
+  <style>
+    *{box-sizing:border-box} body{margin:0;background:#050505;color:#fff;font-family:Inter,Arial,sans-serif} a{color:inherit;text-decoration:none}
+    .wrap{width:min(1120px,92%);margin:auto}.nav{display:flex;justify-content:space-between;align-items:center;padding:26px 0;border-bottom:1px solid #1f1f1f}.brand{font-size:26px;font-weight:900;letter-spacing:-.04em}.links{display:flex;gap:18px;color:#bdbdbd}.btn{display:inline-flex;align-items:center;justify-content:center;border:1px solid #fff;border-radius:999px;padding:12px 18px;font-weight:800;background:#fff;color:#000}.btn.dark{background:#000;color:#fff;border-color:#2a2a2a}.hero{padding:92px 0 70px;text-align:center}.pill{display:inline-block;border:1px solid #333;border-radius:999px;padding:8px 13px;color:#ccc;background:#111}.hero h1{font-size:clamp(44px,8vw,92px);line-height:.9;margin:22px 0;letter-spacing:-.08em}.hero p{color:#bdbdbd;font-size:20px;line-height:1.6;max-width:760px;margin:0 auto 32px}.actions{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin:50px 0}.card{background:#0d0d0d;border:1px solid #242424;border-radius:24px;padding:26px;box-shadow:0 20px 80px rgba(255,255,255,.04)}.card h3{margin:0 0 10px;font-size:22px}.card p{margin:0;color:#aaa;line-height:1.6}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin:18px 0 70px}.stat{border:1px solid #242424;border-radius:22px;padding:24px;text-align:center;background:#080808}.num{font-size:42px;font-weight:900}.label{color:#999}.panel{margin:70px 0;padding:34px;border:1px solid #242424;border-radius:28px;background:linear-gradient(180deg,#111,#050505)}code{background:#111;border:1px solid #2a2a2a;border-radius:12px;padding:3px 7px;color:#fff}.footer{border-top:1px solid #1f1f1f;color:#777;padding:30px 0;margin-top:50px}@media(max-width:800px){.grid,.stats{grid-template-columns:1fr}.links{display:none}.hero{text-align:left}.actions{justify-content:flex-start}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <nav class="nav"><div class="brand">Kolsec</div><div class="links"><a href="#features">Features</a><a href="#api">API</a><a href="/health">Status</a></div><a class="btn dark" href="#start">Launch Bot</a></nav>
+    <section class="hero"><span class="pill">Black & white Lua protection platform</span><h1>Whitelist, host, and protect Lua scripts.</h1><p>Kolsec gives your Discord server license keys, HWID resets, hosted loadstrings, script panels, and obfuscation powered by your API.</p><div class="actions"><a class="btn" href="#start">Get Started</a><a class="btn dark" href="#api">View API</a></div></section>
+    <section class="stats"><div class="stat"><div class="num">${scriptCount}</div><div class="label">Products</div></div><div class="stat"><div class="num">${keyCount}</div><div class="label">Keys</div></div><div class="stat"><div class="num">${hostedCount}</div><div class="label">Hosted Scripts</div></div></section>
+    <section id="features" class="grid"><div class="card"><h3>Discord Panel</h3><p>Use <code>/setup</code> to post a redeem/reset/my-keys panel directly in your server.</p></div><div class="card"><h3>Hosted Loadstrings</h3><p>Use <code>/hostscript</code> to host Lua on Render and get a Roblox-style loadstring URL.</p></div><div class="card"><h3>Obfuscation</h3><p>Use <code>/obfuscate</code> or obfuscate while hosting through your configured API.</p></div><div class="card"><h3>License Keys</h3><p>Create scripts, generate expiring keys, revoke access, and track redeemed users.</p></div><div class="card"><h3>HWID Locking</h3><p>The verification API binds a redeemed key to the first HWID that checks in.</p></div><div class="card"><h3>REST API</h3><p>Your loader can verify keys with <code>POST /api/verify</code>.</p></div></section>
+    <section id="api" class="panel"><h2>Loader hosting</h2><p>Hosted scripts are served at:</p><p><code>/script/&lt;host_id&gt;.lua</code></p><p>Loadstring redirect/snippet endpoint:</p><p><code>/loadstring/&lt;host_id&gt;</code></p></section>
+    <section id="start" class="panel"><h2>Discord Commands</h2><p><code>/setup</code> <code>/createscript</code> <code>/genkey</code> <code>/hostscript</code> <code>/obfuscate</code> <code>/redeem</code> <code>/reset-hwid</code></p><p>Commands are inside <strong>server.js</strong> and deploy automatically when the bot starts if <code>CLIENT_ID</code> is set.</p></section>
+    <footer class="footer">Kolsec © ${new Date().getFullYear()} — original black and white license platform.</footer>
+  </div>
+</body>
+</html>`;
+}
+
 // ---------------- Express API ----------------
 function startApiServer() {
   const app = express();
   app.use(express.json({ limit: '64kb' }));
 
-  app.get('/', (req, res) => res.send('Discord license bot is running.'));
-  app.get('/health', (req, res) => res.json({ ok: true }));
+  app.get('/', (req, res) => res.type('html').send(kolsecHomePage()));
+  app.get('/health', (req, res) => res.json({ ok: true, name: 'Kolsec' }));
+
+  app.get('/script/:id.lua', (req, res) => {
+    const script = db.prepare('SELECT * FROM hosted_scripts WHERE id = ?').get(req.params.id);
+    if (!script) return res.status(404).type('text/plain').send('-- Kolsec: script not found');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.type('text/plain').send(script.code);
+  });
+
+  app.get('/loadstring/:id', (req, res) => {
+    const script = db.prepare('SELECT * FROM hosted_scripts WHERE id = ?').get(req.params.id);
+    if (!script) return res.status(404).type('text/plain').send('-- Kolsec: script not found');
+    const base = publicBaseUrl();
+    const rawUrl = `${base}/script/${script.id}.lua`;
+    return res.type('text/plain').send(`loadstring(game:HttpGet("${rawUrl}"))()`);
+  });
+
+  app.get('/hosted', (req, res) => {
+    const rows = db.prepare('SELECT id, name, obfuscated, created_at FROM hosted_scripts ORDER BY created_at DESC LIMIT 50').all();
+    res.json({ ok: true, scripts: rows.map(r => ({ ...r, script_url: `${publicBaseUrl()}/script/${r.id}.lua`, loadstring_url: `${publicBaseUrl()}/loadstring/${r.id}` })) });
+  });
 
   app.post('/api/verify', (req, res) => {
     if (GLOBAL_API_TOKEN && req.header('X-Global-Token') !== GLOBAL_API_TOKEN) {
