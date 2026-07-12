@@ -32,7 +32,7 @@ const {
   DATABASE_PATH = './data.sqlite',
   GLOBAL_API_TOKEN,
   PUBLIC_BASE_URL,
-  OBFUSCATOR_API_URL = 'https://leakd-detector.up.railway.app',
+  OBFUSCATOR_API_URL = 'https://luarmor-bot-1-0yt4.onrender.com',
   DISCORD_OAUTH_CLIENT_ID,
   DISCORD_CLIENT_SECRET,
   SESSION_SECRET,
@@ -347,6 +347,17 @@ CREATE TABLE IF NOT EXISTS key_system_templates (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+
+CREATE TABLE IF NOT EXISTS execution_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  script_id TEXT NOT NULL,
+  license_key TEXT,
+  hwid TEXT,
+  ip TEXT,
+  executor TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS website_users (
   id TEXT PRIMARY KEY,
   username TEXT,
@@ -583,246 +594,196 @@ function publicBaseUrl() {
 }
 
 function makeLoaderSnippet(scriptId) {
-  return `loadstring(game:HttpGet("${publicBaseUrl()}/loadstring/${scriptId}"))()`;
+  return `loadstring(game:HttpGet("${publicBaseUrl()}/loadstring/${scriptId}"))("${scriptId}")`;
 }
 
-function makeProtectedLoader(rawUrl) {
+function makeProtectedLoader(rawUrl, scriptId) {
   const home = publicBaseUrl();
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+';
+  
   return `--[[
-\tKarma Protection Loader
-\tStable execution path
+\tKarma Protection VM Loader v3
+\tSecure Instruction Stream
 ]]
-return(function(...)
-  local _home=${JSON.stringify(home)}
-  local _url=${JSON.stringify(rawUrl)}
-  local function _safe(fn,...) local ok,res=pcall(fn,...) if ok then return res end return nil end
-  local function _tamper()
-    if setclipboard then _safe(setclipboard,_home) end
-    if warn then _safe(warn,"Karma loader fallback: ".._home) end
-    return nil
+return (function(_sid, ...)
+  local _G = getfenv(0) or _G
+  local _type, _pcall, _tostr, _byte, _error = type, pcall, tostring, string.byte, error
+  local _load = loadstring or load
+  local _warn = (typeof(warn) == "function") and warn or print
+  local _setclip = (typeof(setclipboard) == "function") and setclipboard or nil
+  
+  local _04wy = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+"
+  local _iqru = ${JSON.stringify(home)}
+  local _30lq = ${JSON.stringify(rawUrl)}
+  local _r0wo = { script_id = ${JSON.stringify(scriptId)} }
+  
+  local function _gat3(m)
+    if _setclip then _pcall(_setclip, _iqru) end
+    _pcall(_warn, "[Karma VM] " .. _tostr(m) .. " | " .. _iqru)
+    while true do _error(m, 0) end
   end
-  local function _get(url)
-    if game and game.HttpGet then
-      local r=_safe(function() return game:HttpGet(url) end)
-      if type(r)=="string" then return r end
-    end
-    local req = (syn and syn.request) or http_request or request
-    if type(req)=="function" then
-      local res=_safe(req,{Url=url,Method="GET"})
-      if type(res)=="table" then return res.Body or res.body end
-      if type(res)=="string" then return res end
-    end
-    return nil
+
+  local function _xm17(f, ...)
+    local ok, r = _pcall(f, ...)
+    return ok and r or nil
   end
-  if type(loadstring or load)~="function" then return _tamper() end
-  local _src=_get(_url)
-  if type(_src)~="string" or #_src<1 then return _tamper() end
-  local _ok,_fn=pcall(loadstring or load,_src,"KarmaLoaderPayload")
-  if not _ok or type(_fn)~="function" then return _tamper() end
-  return _fn(...)
+
+  local function _r8wq(v)
+    local s, n = _tostr(v), 2166136261
+    for i = 1, #s do
+      n = bit32.bxor(n, _byte(s, i))
+      n = (n * 16777619) % 4294967296
+    end
+    return n
+  end
+
+  -- VM State
+  
+  local _gqej = 1
+  local _bmcv = getfenv(1)
+  
+  -- Instruction Stream (Encoded)
+  -- 1: PULSE, 2: CHECK_ENV, 3: CHECK_HOOKS, 4: CHECK_GAME, 5: FETCH, 6: EXECUTE
+  local _y4m2 = {1, 2, 3, 4, 5, 7, 8, 1, 3, 6}
+  
+  local _rrw1 = {
+    [1] = function() -- PULSE / TAMPER CHECK
+      local _raw = { _K = "Karma Protection" }
+      local _sig = { _K = 2947889846 }
+      for k, v in pairs(_sig) do
+        if _r8wq(_raw[k]) ~= v then _gat3("tamper detected") end
+      end
+    end,
+    [2] = function() -- CHECK_ENV
+      if typeof(getfenv) == "function" then
+        local e = _xm17(getfenv, 1)
+        if _type(e) == "table" then
+          local s = { "hookfunction", "newcclosure", "syn", "fluxus" }
+          for _, k in ipairs(s) do
+            if e[k] ~= nil and rawget(_G, k) == nil then _gat3("env logger: " .. k) end
+          end
+        end
+      end
+    end,
+    [3] = function() -- CHECK_HOOKS
+      local c = {tostring, type, pcall, pairs, _load}
+      for _, f in ipairs(c) do
+        if typeof(f) ~= "function" then _gat3("hook detected") end
+        if typeof(islclosure) == "function" and islclosure(f) then _gat3("hooked closure") end
+      end
+    end,
+    [4] = function() -- CHECK_GAME
+      local ok, info = _pcall(function() return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId) end)
+      if ok and _type(info) == "table" and _type(info.Name) ~= "string" then _gat3("game tamper") end
+    end,
+    [5] = function() -- FETCH
+      local function _g(u)
+        if game and game.HttpGet then
+          local r = _xm17(function() return game:HttpGet(u) end)
+          if _type(r) == "string" and #r > 0 then return r end
+        end
+        local req = (typeof(syn) == "table" and syn.request) or (typeof(http_request) == "function" and http_request) or (typeof(request) == "function" and request)
+        if _type(req) == "function" then
+          local res = _xm17(req, { Url = u, Method = "GET" })
+          if _type(res) == "table" then return res.Body or res.body end
+        end
+        return nil
+      end
+      _r0wo.src = _g(_30lq)
+      if _type(_r0wo.src) ~= "string" then _gat3("fetch failed") end
+    end,
+    
+    [7] = function() -- LOGGING
+      local function _l(u, d)
+        local req = (typeof(syn) == "table" and syn.request) or (typeof(http_request) == "function" and http_request) or (typeof(request) == "function" and request)
+        if _type(req) == "function" then
+          _pcall(req, {
+            Url = u,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = game:GetService("HttpService"):JSONEncode(d)
+          })
+        end
+      end
+      local d = {
+        script_id = _r0wo.script_id or "unknown",
+        key = _G.KarmaKey or "none",
+        hwid = (typeof(gethwid) == "function" and gethwid()) or "none",
+        executor = (typeof(identifyexecutor) == "function" and identifyexecutor()) or "unknown"
+      }
+      _l(_iqru .. "/api/log-execution", d)
+    end,
+
+    
+    [8] = function() -- SOURCE ANTI-TAMPER
+      local function _sc(s)
+        local c = 0
+        if s then
+          for i = 1, #s do
+            c = (c + _byte(s, i) * i) % 4294967295
+          end
+        end
+        return c
+      end
+      local src1 = debug.getinfo(1).source
+      local sum1 = _sc(src1)
+      -- Use a simple loop for wait if task.wait isn't available
+      if typeof(task) == "table" and task.wait then task.wait(0.1) end
+      local src2 = debug.getinfo(1).source
+      local sum2 = _sc(src2)
+      if sum1 ~= sum2 or sum1 == 0 then
+        _gat3("source tampering detected")
+      end
+    end,
+
+    [6] = function(...) -- EXECUTE
+      if _type(_load) ~= "function" then _gat3("no load") end
+      local ok, f = _pcall(_load, _r0wo.src, "KarmaVM")
+      if not ok or _type(f) ~= "function" then _gat3("load failed") end
+      return f(...)
+    end
+  }
+
+  -- Interpreter Loop
+  local _614k
+  while _gqej <= #_y4m2 do
+    local _szk7 = _y4m2[_gqej]
+    local _ci83 = _rrw1[_szk7]
+    if _szk7 == 6 then
+      return _ci83(...)
+    else
+      _ci83()
+    end
+    _gqej = _gqej + 1
+  end
 end)(...)
 `;
 }
-
-function kers0neLocalObfuscate(luaCode, opts = {}) {
-  // Stronger Karma/Kers0ne-style obfuscator.
-  // Uses multi-key XOR + rolling state + Base66 text packing + checksum validation.
-  // Designed to execute reliably while making static dumping/deobfuscation harder.
-  const source = String(luaCode || '');
-  const strength = Math.max(1, Math.min(3, Number(opts.strength || 2)));
-  const bytes = Buffer.from(source, 'utf8');
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%'; // 66 chars
-  const keyCount = strength === 3 ? 48 : strength === 2 ? 32 : 16;
-  const keys = Array.from(crypto.randomBytes(keyCount));
-  const seedA = crypto.randomBytes(1)[0] || 173;
-  const seedB = crypto.randomBytes(1)[0] || 91;
-  const seedC = crypto.randomBytes(1)[0] || 47;
-  const home = publicBaseUrl();
-
-  let prev = seedB;
-  const encrypted = Array.from(bytes, (byte, index) => {
-    const i = index + 1;
-    const k1 = keys[(i - 1) % keys.length];
-    const k2 = keys[(i * 7 + seedA) % keys.length];
-    const rolling = (seedA + i * 17 + (i % 11) * seedB + prev + seedC + k2) & 255;
-    let enc = byte ^ k1 ^ rolling;
-    enc = (enc + ((i * 13 + seedC) & 255)) & 255;
-    prev = (enc + k1 + seedB + i) & 255;
-    return enc;
-  });
-
-  let packed = '';
-  for (const b of encrypted) {
-    packed += alphabet[Math.floor(b / 66)] + alphabet[b % 66];
-  }
-  let keyPacked = '';
-  for (const b of keys) {
-    keyPacked += alphabet[Math.floor(b / 66)] + alphabet[b % 66];
-  }
-
-  const checksum = bytes.reduce((a, b, i) => (a + ((b + 1) * ((i % 251) + 1))) % 2147483647, 7);
-  const decoy = `print(${JSON.stringify('Karma Protection: decoy payload')})`;
-  let decoyPacked = '';
-  for (const b of Buffer.from(decoy, 'utf8')) {
-    const e = b ^ seedC;
-    decoyPacked += alphabet[Math.floor(e / 66)] + alphabet[e % 66];
-  }
-
-  const names = Array.from({ length: 26 }, () => `_${crypto.randomBytes(3).toString('hex')}`);
-  const [nAlphabet,nPayload,nKeys,nDecoy,nChar,nByte,nSub,nFind,nConcat,nLoad,nPcall,nType,nBxor,nBand,nFloor,nOut,nPrev,nSeedA,nSeedB,nSeedC,nChk,nHome,nTamper,nDecode,nWipe,nLen] = names;
-
-  return `--[[
-\tProtected By Kers0ne Obfuscator
-\tKarma Protection Anti-Tamper: Base66 Multi-XOR
-]]
-
-return(function(...)
-  local ${nAlphabet}=${JSON.stringify(alphabet)}
-  local ${nPayload}=[=[${packed}]=]
-  local ${nKeys}=[=[${keyPacked}]=]
-  local ${nDecoy}=[=[${decoyPacked}]=]
-  local ${nChar}=string.char
-  local ${nByte}=string.byte
-  local ${nSub}=string.sub
-  local ${nFind}=string.find
-  local ${nConcat}=table.concat
-  local ${nLoad}=loadstring or load
-  local ${nPcall}=pcall
-  local ${nType}=type
-  local ${nFloor}=math.floor
-  local ${nBxor}=(bit32 and bit32.bxor) or (bit and bit.bxor)
-  local ${nBand}=(bit32 and bit32.band) or (bit and bit.band)
-  local ${nSeedA}=${seedA}
-  local ${nSeedB}=${seedB}
-  local ${nSeedC}=${seedC}
-  local ${nLen}=${bytes.length}
-  local ${nHome}=${JSON.stringify(home)}
-
-  local function ${nDecode}(_s)
-    local _r={}
-    for _i=1,#_s,2 do
-      local _a=${nFind}(${nAlphabet},${nSub}(_s,_i,_i),1,true)
-      local _b=${nFind}(${nAlphabet},${nSub}(_s,_i+1,_i+1),1,true)
-      if not _a or not _b then return nil end
-      _r[#_r+1]=(_a-1)*66+(_b-1)
-    end
-    return _r
-  end
-
-  local function ${nTamper}(...)
-    if setclipboard then ${nPcall}(setclipboard,${nHome}) end
-    if warn then ${nPcall}(warn,"Karma Protection triggered: "..${nHome}) end
-    local _d=${nDecode}(${nDecoy}) or {}
-    local _o={}
-    for _i=1,#_d do _o[_i]=${nChar}(${nBxor}(_d[_i],${nSeedC})) end
-    local _fake=${nConcat}(_o)
-    if ${nType}(${nLoad})=="function" then local _ok,_fn=${nPcall}(${nLoad},_fake,"KarmaDecoy") if _ok and ${nType}(_fn)=="function" then return _fn(...) end end
-    return nil
-  end
-
-  local function ${nWipe}(_t) for _i=1,#_t do _t[_i]=0 end end
-  if ${nType}(${nLoad})~="function" or not ${nBxor} or not ${nBand} then return ${nTamper}(...) end
-
-  local _data=${nDecode}(${nPayload})
-  local _keys=${nDecode}(${nKeys})
-  if not _data or not _keys or #_keys<1 then return ${nTamper}(...) end
-
-  local ${nOut}={}
-  local ${nPrev}=${nSeedB}
-  for _i=1,#_data do
-    local _e=_data[_i]
-    local _k1=_keys[((_i-1)%#_keys)+1]
-    local _k2=_keys[((_i*7+${nSeedA})%#_keys)+1]
-    local _unadd=${nBand}(_e-(${nBand}(_i*13+${nSeedC},255)),255)
-    local _roll=${nBand}(${nSeedA}+_i*17+(_i%11)*${nSeedB}+${nPrev}+${nSeedC}+_k2,255)
-    local _plain=${nBxor}(${nBxor}(_unadd,_k1),_roll)
-    ${nOut}[_i]=${nChar}(_plain)
-    ${nPrev}=${nBand}(_e+_k1+${nSeedB}+_i,255)
-  end
-
-  local _src=${nConcat}(${nOut})
-  if #_src~=${nLen} then ${nWipe}(_data); ${nWipe}(_keys); ${nWipe}(${nOut}); return ${nTamper}(...) end
-
-  local ${nChk}=7
-  for _i=1,#_src do
-    local _b=${nByte}(_src,_i)
-    ${nChk}=(${nChk}+((_b+1)*(((_i-1)%251)+1)))%2147483647
-  end
-  if ${nChk}~=${checksum} then ${nWipe}(_data); ${nWipe}(_keys); ${nWipe}(${nOut}); return ${nTamper}(...) end
-
-  local _ok,_fn=${nPcall}(${nLoad},_src,"KarmaProtected")
-  ${nWipe}(_data); ${nWipe}(_keys); ${nWipe}(${nOut})
-  if not _ok or ${nType}(_fn)~="function" then return ${nTamper}(...) end
-  return _fn(...)
-end)(...)
-`;
-}
-
-function karmaVmWrap(luaCode, opts = {}) {
-  // Reliable VM-style wrapper: encrypted instruction stream reconstructs and executes a Lua chunk.
-  // This is intentionally stable: it avoids executor-specific APIs and uses only bit32/bit fallback + loadstring/load.
-  const source = String(luaCode || '');
-  const bytes = Array.from(Buffer.from(source, 'utf8'));
-  const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_'; // base64url-like
-  const key = Array.from(crypto.randomBytes(32));
-  const seed = crypto.randomBytes(1)[0] || 119;
-  const opEmit = crypto.randomInt(20, 230);
-  const opRun = crypto.randomInt(20, 230);
-  const opJunk = crypto.randomInt(20, 230);
-  const stream = [];
-  let prev = seed;
-
-  for (let i = 0; i < bytes.length; i++) {
-    // Decoy op before some bytes; interpreter ignores it.
-    if (i % 9 === 0) stream.push(opJunk, crypto.randomInt(0, 255));
-    const k = key[i % key.length];
-    const roll = (seed + k + (i + 1) * 29 + prev) & 255;
-    const enc = bytes[i] ^ roll;
-    stream.push(opEmit, enc);
-    prev = (enc + k + i) & 255;
-  }
-  stream.push(opRun, 0);
-
-  function pack(arr) {
-    let out = '';
-    for (const b of arr) out += alphabet[(b >> 6) & 63] + alphabet[b & 63];
-    return out;
-  }
-
-  const packedStream = pack(stream);
-  const packedKey = pack(key);
-  const checksum = bytes.reduce((a,b,i)=>(a + (b + 3) * ((i % 241) + 1)) % 2147483647, 13);
-  const names = Array.from({ length: 22 }, () => `_${crypto.randomBytes(3).toString('hex')}`);
-  const [nAlpha,nStream,nKey,nUnpack,nChar,nConcat,nLoad,nPcall,nType,nBxor,nBand,nOut,nPc,nPrev,nSeed,nEmit,nRun,nJunk,nChk,nByte,nWipe,nTamper] = names;
-  const home = publicBaseUrl();
-
-  return `--[[\n\tKarma Protection VM Layer\n\tKers0ne Obfuscator 2nd\n]]\nreturn(function(...)\n  local ${nAlpha}=${JSON.stringify(alphabet)}\n  local ${nStream}=${JSON.stringify(packedStream)}\n  local ${nKey}=${JSON.stringify(packedKey)}\n  local ${nSeed}=${seed}\n  local ${nEmit}=${opEmit}\n  local ${nRun}=${opRun}\n  local ${nJunk}=${opJunk}\n  local ${nChar}=string.char\n  local ${nByte}=string.byte\n  local ${nConcat}=table.concat\n  local ${nLoad}=loadstring or load\n  local ${nPcall}=pcall\n  local ${nType}=type\n  local ${nBxor}=(bit32 and bit32.bxor) or (bit and bit.bxor)\n  local ${nBand}=(bit32 and bit32.band) or (bit and bit.band)\n  local function ${nTamper}()\n    if setclipboard then ${nPcall}(setclipboard,${JSON.stringify(home)}) end\n    if warn then ${nPcall}(warn,'Karma VM protection triggered') end\n    return nil\n  end\n  local function ${nUnpack}(s)\n    local r={}\n    for i=1,#s,2 do\n      local a=${nAlpha}:find(s:sub(i,i),1,true)\n      local b=${nAlpha}:find(s:sub(i+1,i+1),1,true)\n      if not a or not b then return nil end\n      r[#r+1]=(a-1)*64+(b-1)\n    end\n    return r\n  end\n  local function ${nWipe}(t) for i=1,#t do t[i]=0 end end\n  if ${nType}(${nLoad})~='function' or not ${nBxor} or not ${nBand} then return ${nTamper}() end\n  local code=${nUnpack}(${nStream})\n  local key=${nUnpack}(${nKey})\n  if not code or not key then return ${nTamper}() end\n  local ${nOut}={}\n  local ${nPc}=1\n  local ${nPrev}=${nSeed}\n  while ${nPc}<=#code do\n    local op=code[${nPc}]\n    local val=code[${nPc}+1] or 0\n    if op==${nEmit} then\n      local idx=#${nOut}+1\n      local k=key[((idx-1)%#key)+1]\n      local roll=${nBand}(${nSeed}+k+idx*29+${nPrev},255)\n      local plain=${nBxor}(val,roll)\n      ${nOut}[idx]=${nChar}(plain)\n      ${nPrev}=${nBand}(val+k+(idx-1),255)\n    elseif op==${nRun} then\n      break\n    elseif op==${nJunk} then\n      -- ignored decoy instruction\n    else\n      return ${nTamper}()\n    end\n    ${nPc}=${nPc}+2\n  end\n  local src=${nConcat}(${nOut})\n  local ${nChk}=13\n  for i=1,#src do ${nChk}=(${nChk}+(${nByte}(src,i)+3)*(((i-1)%241)+1))%2147483647 end\n  if ${nChk}~=${checksum} then ${nWipe}(code); ${nWipe}(key); ${nWipe}(${nOut}); return ${nTamper}() end\n  local ok,fn=${nPcall}(${nLoad},src,'KarmaVM')\n  ${nWipe}(code); ${nWipe}(key); ${nWipe}(${nOut})\n  if not ok or ${nType}(fn)~='function' then return ${nTamper}() end\n  return fn(...)\nend)(...)\n`;
-}
-
 
 async function callObfuscator(luaCode, level = 'standard') {
+  // Calls the Karma Obfuscator API to obfuscate the given Lua code.
   const selected = String(level || 'standard').toLowerCase();
+  const apiUrl = (OBFUSCATOR_API_URL || 'https://luarmor-bot-1-0yt4.onrender.com').replace(/\/$/, '') + '/api/obfuscate';
 
-  if (selected === 'light') {
-    return kers0neLocalObfuscate(luaCode, { strength: 1 });
+  const res = await fetch(apiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: String(luaCode || ''), level: selected })
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.status.toString());
+    throw new Error(`Karma Obfuscator API error (${res.status}): ${text.slice(0, 200)}`);
   }
 
-  if (selected === 'vm') {
-    // Kers0ne Obfuscator 2nd: local wrapper + VM layer.
-    const stage1 = kers0neLocalObfuscate(luaCode, { strength: 2 });
-    return karmaVmWrap(stage1, { strength: 2 });
+  const data = await res.json();
+  if (!data.ok || typeof data.obfuscated !== 'string') {
+    throw new Error(`Karma Obfuscator API returned an error: ${data.error || JSON.stringify(data).slice(0, 200)}`);
   }
 
-  if (selected === 'max' || selected === 'maximum') {
-    // Maximum: Kers0ne -> VM -> Kers0ne. Stronger but still stable.
-    const stage1 = kers0neLocalObfuscate(luaCode, { strength: 3 });
-    const stage2 = karmaVmWrap(stage1, { strength: 3 });
-    return kers0neLocalObfuscate(stage2, { strength: 3 });
-  }
-
-  // Standard: balanced strength/reliability.
-  return kers0neLocalObfuscate(luaCode, { strength: 2 });
+  return data.obfuscated;
 }
+
 
 
 function verifyAdmin(member, settings) {
@@ -1509,8 +1470,8 @@ function kolsecHomePage() {
   <title>Karma Protection — Lua Code Protection & Licensing</title>
   <meta name="description" content="Karma Protection protects Lua code with obfuscation, HWID-locked keys, hosted loadstrings, and a Discord synced panel." />
   <style>
-    :root{--bg:#030303;--card:#0b0b0c;--muted:#a1a1aa;--line:#242428;--text:#f8fafc;--primary:#ffffff;--soft:#151518}
-    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 50% -8%,rgba(255,255,255,.16),transparent 30%),#030303;color:var(--text);font-family:"SF Pro Display","Aptos","Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.01em}body:before{content:'';position:fixed;right:-170px;bottom:-170px;width:620px;height:620px;background:url('/assets/karma-logo.png') center/contain no-repeat;opacity:.045;filter:grayscale(1);pointer-events:none}.grid{position:fixed;inset:0;background-image:linear-gradient(rgba(255,255,255,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.055) 1px,transparent 1px);background-size:64px 64px;mask-image:linear-gradient(to bottom,#000,transparent 82%);pointer-events:none}a{color:inherit;text-decoration:none}.container{width:min(1180px,92%);margin:auto}header{position:sticky;top:0;z-index:40;border-bottom:1px solid rgba(255,255,255,.12);background:rgba(3,3,3,.82);backdrop-filter:blur(18px)}.nav{height:64px;display:flex;align-items:center;justify-content:space-between}.brand{position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;font-weight:780}.brand img{width:34px;height:34px;border-radius:10px;object-fit:cover;border:1px solid rgba(255,255,255,.24)}.beta{font:10px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;border:1px solid #2d2d32;border-radius:5px;padding:2px 6px;color:#b6b6bd}.menu{width:38px;height:38px;display:grid;place-items:center;border:1px solid #2b2b30;border-radius:10px;background:rgba(255,255,255,.03);color:#fff}.btn{display:inline-flex;align-items:center;gap:10px;border-radius:10px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.055);padding:13px 18px;font:800 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;color:#fff}.btn.primary{background:#fff;color:#050505;border-color:#fff;box-shadow:0 0 40px rgba(255,255,255,.14)}.hero{position:relative;text-align:center;padding:105px 0 80px}.pill{display:inline-flex;gap:10px;align-items:center;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.045);border-radius:999px;padding:8px 13px;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#d4d4d8}.pulse{width:7px;height:7px;border-radius:50%;background:#fff;box-shadow:0 0 18px #fff}.hero h1{font-size:clamp(50px,8vw,104px);line-height:1.02;letter-spacing:-.075em;margin:26px auto 18px;max-width:930px}.glow{text-shadow:0 0 32px rgba(255,255,255,.34)}.hero p{max-width:680px;margin:0 auto;color:#a1a1aa;font:500 15px/1.8 ui-monospace,monospace}.actions{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin-top:34px}.heroVideo{margin:56px auto 0;max-width:860px;border:1px solid rgba(255,255,255,.16);border-radius:24px;overflow:hidden;background:linear-gradient(180deg,#111,#070707);box-shadow:0 0 80px rgba(255,255,255,.08)}.fakeVideo{aspect-ratio:16/9;display:grid;place-items:center;background:radial-gradient(circle at 50% 40%,rgba(255,255,255,.18),transparent 20%),linear-gradient(135deg,#050505,#151515,#050505);background-size:160% 160%;animation:shift 7s infinite alternate}.fakeVideo img{width:110px;height:110px;border-radius:28px;object-fit:cover;filter:grayscale(1);opacity:.9}@keyframes shift{to{background-position:100% 60%}}.caption{padding:14px;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#888}.section{border-top:1px solid rgba(255,255,255,.10);padding:88px 0}.sectionHead{max-width:720px;margin-bottom:34px}.kicker{font:800 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#fff;margin-bottom:10px}.section h2{font-size:clamp(34px,5vw,58px);line-height:1.02;letter-spacing:-.055em;margin:0}.muted{color:#a1a1aa}.features{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.card{border:1px solid rgba(255,255,255,.13);border-radius:28px;background:rgba(15,15,16,.72);padding:26px;transition:.2s ease;box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}.card:hover{border-color:rgba(255,255,255,.35);transform:translateY(-2px);box-shadow:0 0 60px rgba(255,255,255,.07)}.icon{width:38px;height:38px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.18);border-radius:12px;margin-bottom:16px}.card h3{margin:0 0 8px;font-size:18px}.card p{margin:0;color:#a1a1aa;font:500 12px/1.7 ui-monospace,monospace}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.stat{border:1px solid rgba(255,255,255,.13);border-radius:18px;background:rgba(15,15,16,.65);padding:22px;display:flex;gap:15px;align-items:center}.num{font-size:34px;font-weight:850}.pricing{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid rgba(255,255,255,.13);border-radius:28px;overflow:hidden;background:rgba(15,15,16,.45)}.plan{padding:32px}.plan+ .plan{border-left:1px solid rgba(255,255,255,.13);background:rgba(255,255,255,.035)}.price{font-size:64px;font-weight:900;letter-spacing:-.06em}.plan ul{list-style:none;padding:0;margin:22px 0;display:grid;gap:13px}.plan li:before{content:'✓';margin-right:10px}.cta{text-align:center;max-width:760px;margin:auto}.footer{border-top:1px solid rgba(255,255,255,.10);padding:34px 0;color:#777;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}@media(max-width:850px){.features,.stats,.pricing{grid-template-columns:1fr}.plan+.plan{border-left:0;border-top:1px solid rgba(255,255,255,.13)}.brand{position:static;transform:none}.nav{gap:12px}.hero{text-align:left}.actions{justify-content:flex-start}}
+    :root{--bg:#030303;--card:rgba(15,15,16,0.85);--muted:#a1a1aa;--line:rgba(212,175,55,0.2);--text:#f8fafc;--primary:#d4af37;--soft:#151518;--gold:#d4af37}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:linear-gradient(rgba(0,0,0,0.7),rgba(0,0,0,0.7)),url("/assets/bg.png") center/cover fixed no-repeat,#030303;color:var(--text);font-family:"SF Pro Display","Aptos","Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.01em}body:before{content:'';position:fixed;right:-170px;bottom:-170px;width:620px;height:620px;background:url('/assets/karma-logo.png') center/contain no-repeat;opacity:.045;filter:grayscale(1);pointer-events:none}.grid{position:fixed;inset:0;background-image:linear-gradient(rgba(255,255,255,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.055) 1px,transparent 1px);background-size:64px 64px;mask-image:linear-gradient(to bottom,#000,transparent 82%);pointer-events:none}a{color:inherit;text-decoration:none}.container{width:min(1180px,92%);margin:auto}header{position:sticky;top:0;z-index:40;border-bottom:1px solid rgba(255,255,255,.12);background:rgba(3,3,3,.82);backdrop-filter:blur(18px)}.nav{height:64px;display:flex;align-items:center;justify-content:space-between}.brand{position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;font-weight:780}.brand img{width:34px;height:34px;border-radius:10px;object-fit:cover;border:1px solid rgba(212,175,55,0.5)}.beta{font:10px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;border:1px solid #2d2d32;border-radius:5px;padding:2px 6px;color:#b6b6bd}.menu{width:38px;height:38px;display:grid;place-items:center;border:1px solid #2b2b30;border-radius:10px;background:rgba(255,255,255,.03);color:#fff}.btn{display:inline-flex;align-items:center;gap:10px;border-radius:10px;border:1px solid rgba(212,175,55,0.4);background:rgba(255,255,255,.055);padding:13px 18px;font:800 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;color:#fff}.btn.primary{background:#fff;color:#050505;border-color:#fff;box-shadow:0 0 40px rgba(255,255,255,.14)}.hero{position:relative;text-align:center;padding:105px 0 80px}.pill{display:inline-flex;gap:10px;align-items:center;border:1px solid rgba(212,175,55,0.4);background:rgba(255,255,255,.045);border-radius:999px;padding:8px 13px;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#d4d4d8}.pulse{width:7px;height:7px;border-radius:50%;background:#fff;box-shadow:0 0 18px #fff}.hero h1{font-size:clamp(50px,8vw,104px);line-height:1.02;letter-spacing:-.075em;margin:26px auto 18px;max-width:930px}.glow{text-shadow:0 0 32px rgba(255,255,255,.34)}.hero p{max-width:680px;margin:0 auto;color:#a1a1aa;font:500 15px/1.8 ui-monospace,monospace}.actions{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin-top:34px}.heroVideo{margin:56px auto 0;max-width:860px;border:1px solid rgba(255,255,255,.16);border-radius:24px;overflow:hidden;background:linear-gradient(180deg,#111,#070707);box-shadow:0 0 80px rgba(255,255,255,.08)}.fakeVideo{aspect-ratio:16/9;display:grid;place-items:center;background:radial-gradient(circle at 50% 40%,rgba(255,255,255,.18),transparent 20%),linear-gradient(135deg,#050505,#151515,#050505);background-size:160% 160%;animation:shift 7s infinite alternate}.fakeVideo img{width:110px;height:110px;border-radius:28px;object-fit:cover;filter:grayscale(1);opacity:.9}@keyframes shift{to{background-position:100% 60%}}.caption{padding:14px;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#888}.section{border-top:1px solid rgba(255,255,255,.10);padding:88px 0}.sectionHead{max-width:720px;margin-bottom:34px}.kicker{font:800 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#fff;margin-bottom:10px}.section h2{font-size:clamp(34px,5vw,58px);line-height:1.02;letter-spacing:-.055em;margin:0}.muted{color:#a1a1aa}.features{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.card{border:1px solid rgba(255,255,255,.13);border-radius:28px;background:rgba(15,15,16,.72);padding:26px;transition:.2s ease;box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}.card:hover{border-color:rgba(255,255,255,.35);transform:translateY(-2px);box-shadow:0 0 60px rgba(255,255,255,.07)}.icon{width:38px;height:38px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.18);border-radius:12px;margin-bottom:16px}.card h3{margin:0 0 8px;font-size:18px}.card p{margin:0;color:#a1a1aa;font:500 12px/1.7 ui-monospace,monospace}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.stat{border:1px solid rgba(255,255,255,.13);border-radius:18px;background:rgba(15,15,16,.65);padding:22px;display:flex;gap:15px;align-items:center}.num{font-size:34px;font-weight:850}.pricing{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid rgba(255,255,255,.13);border-radius:28px;overflow:hidden;background:rgba(15,15,16,.45)}.plan{padding:32px}.plan+ .plan{border-left:1px solid rgba(255,255,255,.13);background:rgba(255,255,255,.035)}.price{font-size:64px;font-weight:900;letter-spacing:-.06em}.plan ul{list-style:none;padding:0;margin:22px 0;display:grid;gap:13px}.plan li:before{content:'✓';margin-right:10px}.cta{text-align:center;max-width:760px;margin:auto}.footer{border-top:1px solid rgba(255,255,255,.10);padding:34px 0;color:#777;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}@media(max-width:850px){.features,.stats,.pricing{grid-template-columns:1fr}.plan+.plan{border-left:0;border-top:1px solid rgba(255,255,255,.13)}.brand{position:static;transform:none}.nav{gap:12px}.hero{text-align:left}.actions{justify-content:flex-start}}
   </style>
 </head>
 <body>
@@ -1593,7 +1554,7 @@ function discordDashboardPage(user, req = { query: {} }) {
     content = `<div class="card heroCard"><p class="eyebrow">Overview</p><h2>Dashboard</h2><p class="muted">Manage scripts, sources, obfuscation, tutorials, Discord links, redeem codes, and owner tools from one clean dashboard.</p><div class="stats"><div class="stat"><div class="num">${scripts.length}</div><span>Scripts used</span></div><div class="stat"><div class="num">${remaining}</div><span>Slots left</span></div><div class="stat"><div class="num">${scriptQuota}</div><span>Max scripts</span></div></div><div class="anime"></div></div>`;
   }
 
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma Dashboard</title><style>:root{--bg:#000000;--shell:#0b0b0c;--panel:#101011;--panel2:#151516;--line:#2a2a2d;--muted:#a1a1aa;--text:#f8fafc;--gold:#ffffff;--gold2:#f5f5f5}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -10%,rgba(255,255,255,.22),transparent 30%),radial-gradient(circle at 85% 25%,rgba(255,255,255,.07),transparent 24%),#000000;color:var(--text);font-family:"SF Pro Display","Aptos","Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.01em}body:before{content:'';position:fixed;right:-140px;bottom:-140px;width:560px;height:560px;background:url('/assets/karma-logo.png') center/contain no-repeat;opacity:.045;filter:grayscale(1);pointer-events:none}a{color:inherit;text-decoration:none}.page{padding:28px}.shell{max-width:1500px;margin:0 auto;min-height:calc(100vh - 56px);display:grid;grid-template-columns:280px 270px 1fr;border:1px solid rgba(255,255,255,.22);border-radius:34px;overflow:hidden;background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.015));box-shadow:0 34px 140px rgba(0,0,0,.58),0 0 0 1px rgba(255,255,255,.025)}.side{background:linear-gradient(180deg,rgba(12,12,12,.96),rgba(5,5,5,.96));border-right:1px solid rgba(255,255,255,.20);padding:22px;overflow:auto;box-shadow:18px 0 80px rgba(0,0,0,.28)}.brand{display:flex;gap:12px;align-items:center;border-bottom:1px solid #242427;padding-bottom:20px}.brand img,.avatar{width:48px;height:48px;border-radius:16px;object-fit:cover;border:1px solid rgba(255,255,255,.38);box-shadow:0 0 35px rgba(255,255,255,.14)}.brand b{display:block;font-size:18px;font-weight:850}.brand small,.muted,small{color:var(--muted)}.nav{margin-top:20px}.nav a{display:flex;align-items:center;padding:12px 13px;border-radius:14px;color:#d4d4d8;font-weight:720;margin-bottom:4px}.nav a:hover,.nav a.active{background:linear-gradient(90deg,rgba(255,255,255,.18),rgba(255,255,255,.035));color:#fff;box-shadow:inset 3px 0 0 var(--gold)}.scriptsPane{background:rgba(7,7,7,.78);border-right:1px solid rgba(255,255,255,.16);padding:20px;overflow:auto}.scriptLink{display:block;border:1px solid rgba(255,255,255,.14);background:rgba(14,14,14,.86);border-radius:16px;padding:13px;margin-bottom:10px}.scriptLink.active{border-color:var(--gold);background:linear-gradient(180deg,rgba(255,255,255,.14),rgba(18,18,18,.88));box-shadow:0 10px 34px rgba(255,255,255,.08)}.main{padding:28px;min-width:0;position:relative;overflow:hidden}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.profile{display:flex;gap:12px;align-items:center}.card{border:1px solid rgba(255,255,255,.16);border-radius:28px;background:linear-gradient(180deg,rgba(24,24,24,.92),rgba(8,8,8,.97));padding:28px;box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 26px 90px rgba(0,0,0,.32);margin-bottom:18px;position:relative;z-index:1}.card h2{font-size:clamp(32px,4vw,56px);line-height:.95;letter-spacing:-.06em;margin:6px 0 12px}.eyebrow{color:#a1a1aa;text-transform:uppercase;letter-spacing:.18em;font-size:12px;font-weight:850;margin:0 0 8px}.btn,button{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--gold2);background:linear-gradient(180deg,var(--gold2),var(--gold));color:#000;border-radius:999px;padding:12px 18px;font-weight:950;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;box-shadow:0 12px 38px rgba(255,255,255,.16)}.btn:hover,button:hover{transform:translateY(-1px);box-shadow:0 14px 42px rgba(255,255,255,.10)}.btn.dark{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32);box-shadow:none}.secondary{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32)}.buttonRow{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:6px}.danger{background:#220f0f;color:#ffb4ad;border-color:#5b2521}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}.stat{border:1px solid rgba(255,255,255,.14);border-radius:18px;background:rgba(10,10,10,.82);padding:18px}.num{font-size:38px;font-weight:900;letter-spacing:-.05em}select{background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:10px;font:inherit}.inlineForm{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}input,textarea{width:100%;background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:12px;margin:8px 0 14px;font:inherit}textarea{min-height:260px}.check{display:flex;gap:10px;align-items:center}.check input{width:auto}.block{display:block;white-space:pre-wrap;word-break:break-all;padding:12px;margin:10px 0;background:#080809;border:1px solid #343438;border-radius:14px}.row{border:1px solid #27272a;border-radius:14px;padding:12px;margin:8px 0;background:#0b0b0c}.featureGrid,.stepsDash{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:16px}.featureGrid div,.stepsDash div{border:1px solid #27272a;border-radius:16px;background:#0b0b0c;padding:16px}.stepsDash span{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#fff;color:#000;font-weight:900}.anime{height:220px;border-radius:24px;border:1px solid #27272a;margin-top:22px;background:radial-gradient(circle at 30% 50%,rgba(255,255,255,.18),transparent 18%),radial-gradient(circle at 70% 50%,rgba(255,255,255,.11),transparent 20%),linear-gradient(120deg,#000,#111,#000);background-size:160% 160%;animation:movebg 6s infinite alternate;position:relative;overflow:hidden}.anime:after{content:'';position:absolute;inset:-40%;background:conic-gradient(from 0deg,transparent,rgba(255,255,255,.12),transparent 35%);animation:spin 8s linear infinite}@keyframes movebg{to{background-position:100% 60%}}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:1100px){.page{padding:12px}.shell{grid-template-columns:1fr;border-radius:22px}.side,.scriptsPane{border-right:0;border-bottom:1px solid var(--line)}.stats,.featureGrid,.stepsDash{grid-template-columns:1fr}.top{align-items:flex-start;gap:16px;flex-direction:column}}</style></head><body><div class="page"><div class="shell"><aside class="side"><div class="brand"><img src="/assets/karma-logo.png"><div><b>Karma Protection</b><small>${username}</small></div></div><nav class="nav"><a class="${tab==='overview'?'active':''}" href="/dashboard">Overview</a><a class="${tab==='scripts'?'active':''}" href="/dashboard?tab=scripts">Scripts</a><a class="${tab==='obfuscate'?'active':''}" href="/dashboard?tab=obfuscate">Obfuscate</a>${isOwner?`<a class="${tab==='owner'?'active':''}" href="/dashboard?tab=owner">Owner Panel</a>`:''}<a href="/logout">Logout</a></nav></aside><aside class="scriptsPane"><h3>Scripts</h3>${scriptLinks}<a class="btn" href="/dashboard?tab=scripts">New Script</a></aside><main class="main"><div class="top"><div class="profile"><img class="avatar" src="${avatar}"><div><b>${username}</b><br><small>${myScriptCount}/${scriptQuota} scripts used</small></div></div><div class="buttonRow"><a class="btn dark" href="/dashboard?tab=obfuscate">Obfuscator</a><a class="btn dark" href="/">Home</a></div></div>${content}</main></div></div><script>document.getElementById('fileInput')?.addEventListener('change', async e => { const f=e.target.files[0]; if(!f) return; document.querySelector('input[name="name"]').value ||= f.name.replace(/\.(lua|txt)$/i,''); document.getElementById('codeBox').value = await f.text(); });</script></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma Dashboard</title><style>:root{--bg:#000000;--shell:rgba(11,11,12,0.9);--panel:rgba(16,16,17,0.8);--panel2:rgba(21,21,22,0.8);--line:rgba(212,175,55,0.25);--muted:#a1a1aa;--text:#f8fafc;--gold:#d4af37;--gold2:#f1d592}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:linear-gradient(rgba(0,0,0,0.75),rgba(0,0,0,0.75)),url("/assets/bg.png") center/cover fixed no-repeat,#000000;color:var(--text);font-family:"SF Pro Display","Aptos","Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.01em}body:before{content:'';position:fixed;right:-140px;bottom:-140px;width:560px;height:560px;background:url('/assets/karma-logo.png') center/contain no-repeat;opacity:.045;filter:grayscale(1);pointer-events:none}a{color:inherit;text-decoration:none}.page{padding:28px}.shell{max-width:1500px;margin:0 auto;min-height:calc(100vh - 56px);display:grid;grid-template-columns:280px 270px 1fr;border:1px solid rgba(212,175,55,0.4);border-radius:34px;overflow:hidden;background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.015));box-shadow:0 34px 140px rgba(0,0,0,.58),0 0 0 1px rgba(255,255,255,.025)}.side{background:linear-gradient(180deg,rgba(12,12,12,.96),rgba(5,5,5,.96));border-right:1px solid rgba(255,255,255,.20);padding:22px;overflow:auto;box-shadow:18px 0 80px rgba(0,0,0,.28)}.brand{display:flex;gap:12px;align-items:center;border-bottom:1px solid #242427;padding-bottom:20px}.brand img,.avatar{width:48px;height:48px;border-radius:16px;object-fit:cover;border:1px solid rgba(212,175,55,0.6);box-shadow:0 0 35px rgba(212,175,55,0.3)}.brand b{display:block;font-size:18px;font-weight:850}.brand small,.muted,small{color:var(--muted)}.nav{margin-top:20px}.nav a{display:flex;align-items:center;padding:12px 13px;border-radius:14px;color:#d4d4d8;font-weight:720;margin-bottom:4px}.nav a:hover,.nav a.active{background:linear-gradient(90deg,rgba(255,255,255,.18),rgba(255,255,255,.035));color:#fff;box-shadow:inset 3px 0 0 var(--gold)}.scriptsPane{background:rgba(7,7,7,.78);border-right:1px solid rgba(255,255,255,.16);padding:20px;overflow:auto}.scriptLink{display:block;border:1px solid rgba(255,255,255,.14);background:rgba(14,14,14,.86);border-radius:16px;padding:13px;margin-bottom:10px}.scriptLink.active{border-color:var(--gold);background:linear-gradient(180deg,rgba(255,255,255,.14),rgba(18,18,18,.88));box-shadow:0 10px 34px rgba(255,255,255,.08)}.main{padding:28px;min-width:0;position:relative;overflow:hidden}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.profile{display:flex;gap:12px;align-items:center}.card{border:1px solid rgba(255,255,255,.16);border-radius:28px;background:linear-gradient(180deg,rgba(24,24,24,.92),rgba(8,8,8,.97));padding:28px;box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 26px 90px rgba(0,0,0,.32);margin-bottom:18px;position:relative;z-index:1}.card h2{font-size:clamp(32px,4vw,56px);line-height:.95;letter-spacing:-.06em;margin:6px 0 12px}.eyebrow{color:#a1a1aa;text-transform:uppercase;letter-spacing:.18em;font-size:12px;font-weight:850;margin:0 0 8px}.btn,button{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--gold2);background:linear-gradient(180deg,var(--gold2),var(--gold));color:#000;border-radius:999px;padding:12px 18px;font-weight:950;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;box-shadow:0 12px 38px rgba(255,255,255,.16)}.btn:hover,button:hover{transform:translateY(-1px);box-shadow:0 14px 42px rgba(255,255,255,.10)}.btn.dark{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32);box-shadow:none}.secondary{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32)}.buttonRow{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:6px}.danger{background:#220f0f;color:#ffb4ad;border-color:#5b2521}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}.stat{border:1px solid rgba(255,255,255,.14);border-radius:18px;background:rgba(10,10,10,.82);padding:18px}.num{font-size:38px;font-weight:900;letter-spacing:-.05em}select{background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:10px;font:inherit}.inlineForm{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}input,textarea{width:100%;background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:12px;margin:8px 0 14px;font:inherit}textarea{min-height:260px}.check{display:flex;gap:10px;align-items:center}.check input{width:auto}.block{display:block;white-space:pre-wrap;word-break:break-all;padding:12px;margin:10px 0;background:#080809;border:1px solid #343438;border-radius:14px}.row{border:1px solid #27272a;border-radius:14px;padding:12px;margin:8px 0;background:#0b0b0c}.featureGrid,.stepsDash{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:16px}.featureGrid div,.stepsDash div{border:1px solid #27272a;border-radius:16px;background:#0b0b0c;padding:16px}.stepsDash span{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#fff;color:#000;font-weight:900}.anime{height:220px;border-radius:24px;border:1px solid #27272a;margin-top:22px;background:radial-gradient(circle at 30% 50%,rgba(255,255,255,.18),transparent 18%),radial-gradient(circle at 70% 50%,rgba(255,255,255,.11),transparent 20%),linear-gradient(120deg,#000,#111,#000);background-size:160% 160%;animation:movebg 6s infinite alternate;position:relative;overflow:hidden}.anime:after{content:'';position:absolute;inset:-40%;background:conic-gradient(from 0deg,transparent,rgba(255,255,255,.12),transparent 35%);animation:spin 8s linear infinite}@keyframes movebg{to{background-position:100% 60%}}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:1100px){.page{padding:12px}.shell{grid-template-columns:1fr;border-radius:22px}.side,.scriptsPane{border-right:0;border-bottom:1px solid var(--line)}.stats,.featureGrid,.stepsDash{grid-template-columns:1fr}.top{align-items:flex-start;gap:16px;flex-direction:column}}</style></head><body><div class="page"><div class="shell"><aside class="side"><div class="brand"><img src="/assets/karma-logo.png"><div><b>Karma Protection</b><small>${username}</small></div></div><nav class="nav"><a class="${tab==='overview'?'active':''}" href="/dashboard">Overview</a><a class="${tab==='scripts'?'active':''}" href="/dashboard?tab=scripts">Scripts</a><a class="${tab==='obfuscate'?'active':''}" href="/dashboard?tab=obfuscate">Obfuscate</a>${isOwner?`<a class="${tab==='owner'?'active':''}" href="/dashboard?tab=owner">Owner Panel</a>`:''}<a href="/logout">Logout</a></nav></aside><aside class="scriptsPane"><h3>Scripts</h3>${scriptLinks}<a class="btn" href="/dashboard?tab=scripts">New Script</a></aside><main class="main"><div class="top"><div class="profile"><img class="avatar" src="${avatar}"><div><b>${username}</b><br><small>${myScriptCount}/${scriptQuota} scripts used</small></div></div><div class="buttonRow"><a class="btn dark" href="/dashboard?tab=obfuscate">Obfuscator</a><a class="btn dark" href="/">Home</a></div></div>${content}</main></div></div><script>document.getElementById('fileInput')?.addEventListener('change', async e => { const f=e.target.files[0]; if(!f) return; document.querySelector('input[name="name"]').value ||= f.name.replace(/\.(lua|txt)$/i,''); document.getElementById('codeBox').value = await f.text(); });</script></body></html>`;
 }
 
 function makeSession(user) {
@@ -1957,12 +1918,25 @@ function startApiServer() {
     if (!script) return res.status(404).type('text/plain').send('-- Karma Protection: script not found');
     const rawUrl = `${publicBaseUrl()}/script/${script.id}.lua`;
     res.setHeader('Cache-Control', 'no-store');
-    return res.type('text/plain').send(makeProtectedLoader(rawUrl));
+    return res.type('text/plain').send(makeProtectedLoader(rawUrl, script.id));
   });
 
   app.get('/hosted', (req, res) => {
     const rows = db.prepare('SELECT id, name, obfuscated, created_at FROM hosted_scripts ORDER BY created_at DESC LIMIT 50').all();
     res.json({ ok: true, scripts: rows.map(r => ({ ...r, script_url: `${publicBaseUrl()}/script/${r.id}.lua`, loadstring_url: `${publicBaseUrl()}/loadstring/${r.id}` })) });
+  });
+
+  
+  app.post('/api/log-execution', (req, res) => {
+    const { script_id, key, hwid, executor } = req.body || {};
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    
+    if (script_id) {
+      db.prepare('INSERT INTO execution_logs (script_id, license_key, hwid, ip, executor) VALUES (?, ?, ?, ?, ?)')
+        .run(script_id, key || null, hwid || null, ip || null, executor || null);
+    }
+    
+    return res.json({ ok: true });
   });
 
   app.post('/api/verify', (req, res) => {
