@@ -1,3 +1,6 @@
+// server.js
+// Single-file Node.js Discord license bot. No ./src folder needed.
+
 require('dotenv').config();
 
 const express = require('express');
@@ -40,24 +43,53 @@ if (!DISCORD_TOKEN) {
 // ---------------- Commands ----------------
 const commands = [
   new SlashCommandBuilder()
+    .setName('help')
+    .setDescription('Show Kolsec command list'),
+
+  new SlashCommandBuilder()
+    .setName('status')
+    .setDescription('Show Kolsec service/database status'),
+
+  new SlashCommandBuilder()
     .setName('setup')
-    .setDescription('Set up the Polsec-like license panel')
+    .setDescription('Set up the Kolsec panel')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addRoleOption(o => o.setName('admin_role').setDescription('Role allowed to manage keys').setRequired(true))
-    .addRoleOption(o => o.setName('customer_role').setDescription('Role given after redeeming').setRequired(true))
+    .addRoleOption(o => o.setName('admin_role').setDescription('Role allowed to manage Kolsec').setRequired(true))
+    .addRoleOption(o => o.setName('customer_role').setDescription('Buyer role given after redeeming').setRequired(true))
     .addChannelOption(o => o.setName('panel_channel').setDescription('Channel to post the panel').addChannelTypes(ChannelType.GuildText).setRequired(true))
     .addChannelOption(o => o.setName('log_channel').setDescription('Logs channel').addChannelTypes(ChannelType.GuildText).setRequired(false)),
 
   new SlashCommandBuilder()
+    .setName('panel')
+    .setDescription('Repost the Kolsec button panel')
+    .addChannelOption(o => o.setName('channel').setDescription('Where to post the panel').addChannelTypes(ChannelType.GuildText).setRequired(false)),
+
+  new SlashCommandBuilder()
+    .setName('apply')
+    .setDescription('Create/apply a protected script and host its loadstring')
+    .addStringOption(o => o.setName('name').setDescription('Script name').setRequired(true).setMaxLength(80))
+    .addStringOption(o => o.setName('code').setDescription('Lua code to host, max 4000 chars').setRequired(true).setMaxLength(4000))
+    .addBooleanOption(o => o.setName('obfuscate').setDescription('Obfuscate before hosting')),
+
+  new SlashCommandBuilder()
     .setName('createscript')
     .setDescription('Create a script/product and API secret')
-    .addStringOption(o => o.setName('name').setDescription('Script/product name').setRequired(true)),
+    .addStringOption(o => o.setName('name').setDescription('Script/product name').setRequired(true).setMaxLength(80)),
 
-  new SlashCommandBuilder().setName('scripts').setDescription('List scripts/products'),
+  new SlashCommandBuilder()
+    .setName('scripts')
+    .setDescription('List scripts/products'),
+
+  new SlashCommandBuilder()
+    .setName('generatekey')
+    .setDescription('Generate license keys')
+    .addStringOption(o => o.setName('script_id').setDescription('Script ID from /apply or /createscript').setRequired(true))
+    .addIntegerOption(o => o.setName('days').setDescription('Days until expiry, 0 = lifetime').setRequired(true).setMinValue(0).setMaxValue(3650))
+    .addIntegerOption(o => o.setName('quantity').setDescription('Number of keys').setRequired(false).setMinValue(1).setMaxValue(20)),
 
   new SlashCommandBuilder()
     .setName('genkey')
-    .setDescription('Generate license keys')
+    .setDescription('Alias for /generatekey')
     .addStringOption(o => o.setName('script_id').setDescription('Script ID').setRequired(true))
     .addIntegerOption(o => o.setName('days').setDescription('Days until expiry, 0 = lifetime').setRequired(true).setMinValue(0).setMaxValue(3650))
     .addIntegerOption(o => o.setName('quantity').setDescription('Number of keys').setRequired(false).setMinValue(1).setMaxValue(20)),
@@ -68,8 +100,35 @@ const commands = [
     .addStringOption(o => o.setName('key').setDescription('License key').setRequired(true)),
 
   new SlashCommandBuilder()
+    .setName('keyinfo')
+    .setDescription('Show license key info')
+    .addStringOption(o => o.setName('key').setDescription('License key').setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('mykeys')
+    .setDescription('Show your redeemed keys'),
+
+  new SlashCommandBuilder()
+    .setName('freekey')
+    .setDescription('Get a free key for the first configured script'),
+
+  new SlashCommandBuilder()
+    .setName('getrole')
+    .setDescription('Get buyer role if you have a redeemed key'),
+
+  new SlashCommandBuilder()
+    .setName('viewscript')
+    .setDescription('View hosted script loadstrings'),
+
+  new SlashCommandBuilder()
+    .setName('resethwid')
+    .setDescription('Reset HWID for a user')
+    .addUserOption(o => o.setName('user').setDescription('User to reset').setRequired(true))
+    .addStringOption(o => o.setName('key').setDescription('Optional specific key').setRequired(false)),
+
+  new SlashCommandBuilder()
     .setName('reset-hwid')
-    .setDescription('Reset the HWID on a license key')
+    .setDescription('Reset your own HWID or, for admins, a specific key')
     .addStringOption(o => o.setName('key').setDescription('License key').setRequired(true)),
 
   new SlashCommandBuilder()
@@ -78,20 +137,19 @@ const commands = [
     .addStringOption(o => o.setName('key').setDescription('License key').setRequired(true)),
 
   new SlashCommandBuilder()
-    .setName('keyinfo')
-    .setDescription('Show license key info')
-    .addStringOption(o => o.setName('key').setDescription('License key').setRequired(true)),
-
-  new SlashCommandBuilder().setName('mykeys').setDescription('Show your redeemed keys'),
+    .setName('extendkey')
+    .setDescription('Extend a license key by days')
+    .addStringOption(o => o.setName('key').setDescription('License key').setRequired(true))
+    .addIntegerOption(o => o.setName('days').setDescription('Days to add').setRequired(true).setMinValue(1).setMaxValue(3650)),
 
   new SlashCommandBuilder()
-    .setName('loader')
-    .setDescription('Get a Lua verification loader example')
-    .addStringOption(o => o.setName('script_id').setDescription('Script ID').setRequired(true)),
+    .setName('deletekey')
+    .setDescription('Permanently delete a license key')
+    .addStringOption(o => o.setName('key').setDescription('License key').setRequired(true)),
 
   new SlashCommandBuilder()
     .setName('hostscript')
-    .setDescription('Host Lua code on the Render website and get a loadstring')
+    .setDescription('Host Lua code on Render and get a loadstring')
     .addStringOption(o => o.setName('name').setDescription('Script name').setRequired(true).setMaxLength(80))
     .addStringOption(o => o.setName('code').setDescription('Lua code to host, max 4000 chars').setRequired(true).setMaxLength(4000))
     .addBooleanOption(o => o.setName('obfuscate').setDescription('Run the code through your obfuscator API before hosting')),
@@ -100,7 +158,12 @@ const commands = [
     .setName('obfuscate')
     .setDescription('Obfuscate Lua code using your obfuscator API')
     .addStringOption(o => o.setName('code').setDescription('Lua code to obfuscate, max 4000 chars').setRequired(true).setMaxLength(4000))
-    .addStringOption(o => o.setName('filename').setDescription('Output filename').setRequired(false).setMaxLength(80))
+    .addStringOption(o => o.setName('filename').setDescription('Output filename').setRequired(false).setMaxLength(80)),
+
+  new SlashCommandBuilder()
+    .setName('loader')
+    .setDescription('Get a Lua verification loader example')
+    .addStringOption(o => o.setName('script_id').setDescription('Script ID').setRequired(true))
 ].map(c => c.toJSON());
 
 async function deployCommands() {
@@ -309,23 +372,29 @@ const client = new Client({
 
 function panelEmbed() {
   return new EmbedBuilder()
-    .setTitle('🔐 License Panel')
-    .setDescription('Use the buttons below to manage your script access.')
-    .addFields(
-      { name: '✅ Redeem Key', value: 'Claim a license key and get the customer role.' },
-      { name: '🖥️ Reset HWID', value: 'Clear the device lock on your redeemed key.' },
-      { name: '🔑 My Keys', value: 'View your redeemed licenses.' }
-    )
-    .setColor(0x5865f2)
-    .setFooter({ text: 'Polsec-like license system' });
+    .setTitle('Kolsec Hub')
+    .setDescription('Use the buttons below to manage your key')
+    .setColor(0x2f3136)
+    .setFooter({ text: 'Kolsec | v1' });
 }
 
 function panelButtons() {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('panel_redeem').setLabel('Redeem Key').setEmoji('✅').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId('panel_reset_hwid').setLabel('Reset HWID').setEmoji('🖥️').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('panel_mykeys').setLabel('My Keys').setEmoji('🔑').setStyle(ButtonStyle.Secondary)
-  );
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('panel_view_script').setLabel('View Script').setEmoji('📜').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('panel_redeem').setLabel('Redeem Key').setEmoji('🔑').setStyle(ButtonStyle.Success)
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('panel_key_info').setLabel('Key Info').setEmoji('📊').setStyle(ButtonStyle.Secondary)
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('panel_get_buyer_role').setLabel('Get Buyer Role').setEmoji('👤').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('panel_free_key').setLabel('Free Key').setEmoji('🔗').setStyle(ButtonStyle.Secondary)
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('panel_reset_hwid').setLabel('Reset HWID').setEmoji('⚙️').setStyle(ButtonStyle.Danger)
+    )
+  ];
 }
 
 async function logGuild(guild, text) {
@@ -388,6 +457,42 @@ client.on('interactionCreate', async interaction => {
 async function handleCommand(interaction) {
   const commandName = interaction.commandName;
 
+  if (commandName === 'help') {
+    return interaction.reply({
+      ephemeral: true,
+      content: [
+        '**Kolsec Commands**',
+        '`/setup` - set up roles, logs, and the panel',
+        '`/panel` - repost the button panel',
+        '`/apply` - create a script, host it, and get a loadstring',
+        '`/createscript` - create a script/API secret only',
+        '`/scripts` - list scripts',
+        '`/generatekey` / `/genkey` - generate license keys',
+        '`/redeem` - redeem a key',
+        '`/keyinfo` - view key info',
+        '`/mykeys` - view your keys',
+        '`/freekey` - get a free key if enabled by having a script',
+        '`/getrole` - get buyer role after redeeming',
+        '`/viewscript` - view hosted loadstrings',
+        '`/resethwid user` - admin reset HWID for a user',
+        '`/reset-hwid` - reset your own key HWID',
+        '`/revoke` - revoke a key',
+        '`/extendkey` - extend a key',
+        '`/deletekey` - delete a key',
+        '`/hostscript` - host Lua and get a loadstring',
+        '`/obfuscate` - obfuscate Lua using your API',
+        '`/loader` - verification loader example'
+      ].join('\n')
+    });
+  }
+
+  if (commandName === 'status') {
+    const scriptCount = db.prepare('SELECT COUNT(*) AS count FROM scripts WHERE guild_id = ?').get(interaction.guildId).count;
+    const keyCount = db.prepare('SELECT COUNT(*) AS count FROM licenses WHERE guild_id = ?').get(interaction.guildId).count;
+    const hostedCount = db.prepare('SELECT COUNT(*) AS count FROM hosted_scripts WHERE guild_id = ?').get(interaction.guildId).count;
+    return interaction.reply({ ephemeral: true, content: `Kolsec is online.\nScripts: **${scriptCount}**\nKeys: **${keyCount}**\nHosted scripts: **${hostedCount}**\nWebsite: ${publicBaseUrl()}` });
+  }
+
   if (commandName === 'setup') {
     const adminRole = interaction.options.getRole('admin_role', true);
     const customerRole = interaction.options.getRole('customer_role', true);
@@ -401,7 +506,7 @@ async function handleCommand(interaction) {
       panel_channel_id: panelChannel.id
     });
 
-    const panelMessage = await panelChannel.send({ embeds: [panelEmbed()], components: [panelButtons()] });
+    const panelMessage = await panelChannel.send({ embeds: [panelEmbed()], components: panelButtons() });
     upsertSettings(interaction.guildId, { panel_message_id: panelMessage.id });
 
     await interaction.reply({ ephemeral: true, content: `Setup complete. Panel posted in ${panelChannel}.` });
@@ -409,7 +514,20 @@ async function handleCommand(interaction) {
     return;
   }
 
-  const adminCommands = ['createscript', 'scripts', 'genkey', 'revoke', 'keyinfo', 'loader', 'hostscript', 'obfuscate'];
+  if (commandName === 'panel') {
+    if (!requireAdmin(interaction)) {
+      return interaction.reply({ ephemeral: true, content: 'You need Administrator or the configured admin role to use this command.' });
+    }
+    const settings = getSettings(interaction.guildId);
+    const channel = interaction.options.getChannel('channel', false) || (settings?.panel_channel_id ? await interaction.guild.channels.fetch(settings.panel_channel_id).catch(() => null) : interaction.channel);
+    if (!channel || !channel.isTextBased()) return interaction.reply({ ephemeral: true, content: 'Panel channel not found.' });
+    const panelMessage = await channel.send({ embeds: [panelEmbed()], components: panelButtons() });
+    upsertSettings(interaction.guildId, { panel_channel_id: channel.id, panel_message_id: panelMessage.id });
+    await interaction.reply({ ephemeral: true, content: `Panel posted in ${channel}.` });
+    return;
+  }
+
+  const adminCommands = ['generatekey', 'apply', 'hostscript', 'resethwid', 'createscript', 'scripts', 'genkey', 'revoke', 'extendkey', 'deletekey', 'panel', 'loader', 'obfuscate'];
   if (adminCommands.includes(commandName) && !requireAdmin(interaction)) {
     await interaction.reply({ ephemeral: true, content: 'You need Administrator or the configured admin role to use this command.' });
     return;
@@ -429,7 +547,7 @@ async function handleCommand(interaction) {
     return interaction.reply({ ephemeral: true, content: scripts.map(s => `**${s.name}**\nID: \`${s.id}\`\nSecret: \`${s.api_secret_preview}\``).join('\n\n') });
   }
 
-  if (commandName === 'genkey') {
+  if (commandName === 'generatekey' || commandName === 'genkey') {
     const scriptId = interaction.options.getString('script_id', true);
     const days = interaction.options.getInteger('days', true);
     const quantity = interaction.options.getInteger('quantity') || 1;
@@ -456,6 +574,23 @@ async function handleCommand(interaction) {
     return interaction.reply({ ephemeral: true, content: result.message });
   }
 
+  if (commandName === 'resethwid') {
+    const target = interaction.options.getUser('user', true);
+    const key = interaction.options.getString('key', false)?.trim();
+
+    let result;
+    if (key) {
+      result = db.prepare('UPDATE licenses SET hwid = NULL WHERE guild_id = ? AND discord_user_id = ? AND license_key = ?')
+        .run(interaction.guildId, target.id, key);
+    } else {
+      result = db.prepare('UPDATE licenses SET hwid = NULL WHERE guild_id = ? AND discord_user_id = ?')
+        .run(interaction.guildId, target.id);
+    }
+
+    await logGuild(interaction.guild, `🖥️ HWID reset for <@${target.id}> by <@${interaction.user.id}>. Rows: ${result.changes}`);
+    return interaction.reply({ ephemeral: true, content: `Reset HWID for ${target}. Updated ${result.changes} key(s).` });
+  }
+
   if (commandName === 'reset-hwid') {
     const key = interaction.options.getString('key', true).trim();
     const result = await resetHwid({ guild: interaction.guild, userId: interaction.user.id, key, admin: requireAdmin(interaction) });
@@ -480,6 +615,50 @@ async function handleCommand(interaction) {
 
   if (commandName === 'mykeys') return sendMyKeys(interaction, interaction.user.id);
 
+  if (commandName === 'freekey') return giveFreeKey(interaction);
+
+  if (commandName === 'getrole') return giveBuyerRole(interaction);
+
+  if (commandName === 'viewscript') return sendHostedScripts(interaction);
+
+  if (commandName === 'apply') {
+    const name = interaction.options.getString('name', true);
+    const originalCode = interaction.options.getString('code', true);
+    const shouldObfuscate = interaction.options.getBoolean('obfuscate') || false;
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const script = createScript({ guildId: interaction.guildId, name, createdBy: interaction.user.id });
+
+    let finalCode = originalCode;
+    if (shouldObfuscate) {
+      try {
+        finalCode = await callObfuscator(originalCode);
+      } catch (error) {
+        await interaction.editReply({ content: `Script was created, but obfuscation/hosting failed: ${error.message}\nScript ID: \`${script.id}\`\nAPI Secret: \`${script.apiSecret}\`` });
+        return;
+      }
+    }
+
+    const hosted = createHostedScript({
+      guildId: interaction.guildId,
+      name,
+      code: String(finalCode),
+      obfuscated: shouldObfuscate,
+      createdBy: interaction.user.id
+    });
+
+    const base = publicBaseUrl();
+    const rawUrl = `${base}/script/${hosted.id}.lua`;
+    const loadstring = `loadstring(game:HttpGet("${rawUrl}"))()`;
+
+    await interaction.editReply({
+      content: `Applied **${name}** successfully.\n\nScript ID:\n\`${script.id}\`\n\nAPI Secret, save this now:\n\`${script.apiSecret}\`\n\nHosted Script:\n${rawUrl}\n\nLoadstring:\n\`\`\`lua\n${loadstring}\n\`\`\``
+    });
+    await logGuild(interaction.guild, `✅ Applied script \`${name}\` by <@${interaction.user.id}>. Script ID: \`${script.id}\``);
+    return;
+  }
+
   if (commandName === 'obfuscate') {
     const code = interaction.options.getString('code', true);
     const filename = (interaction.options.getString('filename') || 'obfuscated.lua').replace(/[^a-zA-Z0-9_.-]/g, '_');
@@ -495,6 +674,27 @@ async function handleCommand(interaction) {
       await interaction.editReply({ content: `Obfuscator API failed: ${error.message}` });
     }
     return;
+  }
+
+  if (commandName === 'extendkey') {
+    const key = interaction.options.getString('key', true).trim();
+    const days = interaction.options.getInteger('days', true);
+    const info = db.prepare('SELECT * FROM licenses WHERE license_key = ? AND guild_id = ?').get(key, interaction.guildId);
+    if (!info) return interaction.reply({ ephemeral: true, content: 'Key not found.' });
+
+    const baseDate = info.expires_at && new Date(info.expires_at).getTime() > Date.now() ? new Date(info.expires_at) : new Date();
+    baseDate.setUTCDate(baseDate.getUTCDate() + days);
+    db.prepare('UPDATE licenses SET expires_at = ? WHERE license_key = ?').run(baseDate.toISOString(), key);
+    await logGuild(interaction.guild, `➕ Key \`${key}\` extended by ${days} day(s) by <@${interaction.user.id}>.`);
+    return interaction.reply({ ephemeral: true, content: `Extended \`${key}\` until ${baseDate.toISOString()}.` });
+  }
+
+  if (commandName === 'deletekey') {
+    const key = interaction.options.getString('key', true).trim();
+    const result = db.prepare('DELETE FROM licenses WHERE license_key = ? AND guild_id = ?').run(key, interaction.guildId);
+    if (!result.changes) return interaction.reply({ ephemeral: true, content: 'Key not found.' });
+    await logGuild(interaction.guild, `🗑️ Key \`${key}\` deleted by <@${interaction.user.id}>.`);
+    return interaction.reply({ ephemeral: true, content: `Deleted \`${key}\`.` });
   }
 
   if (commandName === 'hostscript') {
@@ -554,11 +754,76 @@ async function sendMyKeys(interaction, userId) {
   else await interaction.reply({ ephemeral: true, content });
 }
 
+
+async function sendHostedScripts(interaction) {
+  const rows = db.prepare('SELECT id, name, obfuscated, created_at FROM hosted_scripts WHERE guild_id = ? ORDER BY created_at DESC LIMIT 10').all(interaction.guildId);
+  const base = publicBaseUrl();
+  const content = rows.length
+    ? rows.map(r => `**${r.name}** ${r.obfuscated ? '(obfuscated)' : ''}\nLoadstring:\n\`\`\`lua\nloadstring(game:HttpGet("${base}/script/${r.id}.lua"))()\n\`\`\``).join('\n')
+    : 'No hosted scripts yet. Staff can use `/hostscript` or `/apply`.';
+
+  if (interaction.deferred || interaction.replied) await interaction.followUp({ ephemeral: true, content });
+  else await interaction.reply({ ephemeral: true, content });
+}
+
+async function sendKeyInfo(interaction, key) {
+  const info = db.prepare(`SELECT l.*, s.name AS script_name FROM licenses l JOIN scripts s ON s.id = l.script_id WHERE l.license_key = ? AND l.guild_id = ?`).get(key, interaction.guildId);
+  if (!info) return interaction.reply({ ephemeral: true, content: 'Key not found.' });
+  return interaction.reply({ ephemeral: true, content: `Key: \`${info.license_key}\`\nScript: **${info.script_name}**\nStatus: **${keyStatus(info)}**\nUser: ${info.discord_user_id ? `<@${info.discord_user_id}>` : 'None'}\nHWID: ${info.hwid ? `\`${info.hwid}\`` : 'None'}\nExpires: ${info.expires_at || 'Lifetime'}` });
+}
+
+async function giveBuyerRole(interaction) {
+  const settings = getSettings(interaction.guildId);
+  if (!settings || !settings.customer_role_id) return interaction.reply({ ephemeral: true, content: 'Buyer role is not configured. Run `/setup` first.' });
+
+  const owned = db.prepare('SELECT * FROM licenses WHERE guild_id = ? AND discord_user_id = ? AND revoked = 0 LIMIT 1').get(interaction.guildId, interaction.user.id);
+  if (!owned) return interaction.reply({ ephemeral: true, content: 'You need to redeem a key first.' });
+  if (isExpired(owned.expires_at)) return interaction.reply({ ephemeral: true, content: 'Your key is expired.' });
+
+  await interaction.member.roles.add(settings.customer_role_id).catch(() => null);
+  return interaction.reply({ ephemeral: true, content: 'Buyer role added.' });
+}
+
+async function giveFreeKey(interaction) {
+  const script = db.prepare('SELECT * FROM scripts WHERE guild_id = ? ORDER BY created_at ASC LIMIT 1').get(interaction.guildId);
+  if (!script) return interaction.reply({ ephemeral: true, content: 'No script exists yet. Staff needs to use `/apply` first.' });
+
+  const already = db.prepare('SELECT * FROM licenses WHERE guild_id = ? AND script_id = ? AND discord_user_id = ? LIMIT 1').get(interaction.guildId, script.id, interaction.user.id);
+  if (already) return interaction.reply({ ephemeral: true, content: `You already have a key for **${script.name}**: \`${already.license_key}\`` });
+
+  const key = makeKey('FREE');
+  db.prepare('INSERT INTO licenses (license_key, script_id, guild_id, expires_at, created_by, discord_user_id, redeemed_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)')
+    .run(key, script.id, interaction.guildId, null, interaction.user.id, interaction.user.id);
+
+  const settings = getSettings(interaction.guildId);
+  if (settings && settings.customer_role_id) await interaction.member.roles.add(settings.customer_role_id).catch(() => null);
+  await logGuild(interaction.guild, `🔗 Free key created for <@${interaction.user.id}>: \`${key}\`.`);
+  return interaction.reply({ ephemeral: true, content: `Free key generated and redeemed for **${script.name}**:\n\`${key}\`` });
+}
+
 async function handleButton(interaction) {
+  if (interaction.customId === 'panel_view_script') {
+    return sendHostedScripts(interaction);
+  }
+
   if (interaction.customId === 'panel_redeem') {
     const modal = new ModalBuilder().setCustomId('modal_redeem').setTitle('Redeem License Key');
     modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('key').setLabel('License key').setStyle(TextInputStyle.Short).setRequired(true)));
     return interaction.showModal(modal);
+  }
+
+  if (interaction.customId === 'panel_key_info') {
+    const modal = new ModalBuilder().setCustomId('modal_key_info').setTitle('Key Info');
+    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('key').setLabel('License key').setStyle(TextInputStyle.Short).setRequired(true)));
+    return interaction.showModal(modal);
+  }
+
+  if (interaction.customId === 'panel_get_buyer_role') {
+    return giveBuyerRole(interaction);
+  }
+
+  if (interaction.customId === 'panel_free_key') {
+    return giveFreeKey(interaction);
   }
 
   if (interaction.customId === 'panel_reset_hwid') {
@@ -578,6 +843,10 @@ async function handleModal(interaction) {
     return interaction.reply({ ephemeral: true, content: result.message });
   }
 
+  if (interaction.customId === 'modal_key_info') {
+    return sendKeyInfo(interaction, key);
+  }
+
   if (interaction.customId === 'modal_reset_hwid') {
     const result = await resetHwid({ guild: interaction.guild, userId: interaction.user.id, key, admin: false });
     return interaction.reply({ ephemeral: true, content: result.message });
@@ -588,31 +857,57 @@ function kolsecHomePage() {
   const scriptCount = db.prepare('SELECT COUNT(*) AS count FROM scripts').get().count;
   const keyCount = db.prepare('SELECT COUNT(*) AS count FROM licenses').get().count;
   const hostedCount = db.prepare('SELECT COUNT(*) AS count FROM hosted_scripts').get().count;
+  const latestHosted = db.prepare('SELECT id, name, obfuscated, created_at FROM hosted_scripts ORDER BY created_at DESC LIMIT 3').all();
+
+  const buildCards = latestHosted.length
+    ? latestHosted.map((r, i) => `<a class="build" href="/script/${r.id}.lua"><span>v1.${String(80 - i).padStart(2, '0')}.00${i + 1}</span><strong>${escapeHtml(r.name)}</strong><small>${r.obfuscated ? 'Obfuscated build' : 'Hosted loader'} · ${escapeHtml(r.created_at)}</small></a>`).join('')
+    : `<a class="build" href="#start"><span>v1.00.001</span><strong>Kolsec deployment ready</strong><small>Use /apply or /hostscript to publish your first loader.</small></a>`;
 
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Kolsec - Lua Whitelist & Script Protection</title>
+  <title>Kolsec — Lua Code Protection & Licensing</title>
+  <meta name="description" content="Kolsec protects, hosts, and monetizes Lua scripts with Discord licensing, HWID locking, and hosted loadstrings." />
   <style>
-    *{box-sizing:border-box} body{margin:0;background:#050505;color:#fff;font-family:Inter,Arial,sans-serif} a{color:inherit;text-decoration:none}
-    .wrap{width:min(1120px,92%);margin:auto}.nav{display:flex;justify-content:space-between;align-items:center;padding:26px 0;border-bottom:1px solid #1f1f1f}.brand{font-size:26px;font-weight:900;letter-spacing:-.04em}.links{display:flex;gap:18px;color:#bdbdbd}.btn{display:inline-flex;align-items:center;justify-content:center;border:1px solid #fff;border-radius:999px;padding:12px 18px;font-weight:800;background:#fff;color:#000}.btn.dark{background:#000;color:#fff;border-color:#2a2a2a}.hero{padding:92px 0 70px;text-align:center}.pill{display:inline-block;border:1px solid #333;border-radius:999px;padding:8px 13px;color:#ccc;background:#111}.hero h1{font-size:clamp(44px,8vw,92px);line-height:.9;margin:22px 0;letter-spacing:-.08em}.hero p{color:#bdbdbd;font-size:20px;line-height:1.6;max-width:760px;margin:0 auto 32px}.actions{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin:50px 0}.card{background:#0d0d0d;border:1px solid #242424;border-radius:24px;padding:26px;box-shadow:0 20px 80px rgba(255,255,255,.04)}.card h3{margin:0 0 10px;font-size:22px}.card p{margin:0;color:#aaa;line-height:1.6}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin:18px 0 70px}.stat{border:1px solid #242424;border-radius:22px;padding:24px;text-align:center;background:#080808}.num{font-size:42px;font-weight:900}.label{color:#999}.panel{margin:70px 0;padding:34px;border:1px solid #242424;border-radius:28px;background:linear-gradient(180deg,#111,#050505)}code{background:#111;border:1px solid #2a2a2a;border-radius:12px;padding:3px 7px;color:#fff}.footer{border-top:1px solid #1f1f1f;color:#777;padding:30px 0;margin-top:50px}@media(max-width:800px){.grid,.stats{grid-template-columns:1fr}.links{display:none}.hero{text-align:left}.actions{justify-content:flex-start}}
+    :root{--bg:#050505;--panel:#0b0b0b;--panel2:#111;--text:#fff;--muted:#a3a3a3;--line:#242424;--soft:#e9e9e9;--glow:rgba(255,255,255,.16)}
+    *{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Arial,sans-serif;overflow-x:hidden}
+    a{color:inherit;text-decoration:none}.wrap{width:min(1180px,92%);margin:auto}.noise{position:fixed;inset:0;pointer-events:none;opacity:.06;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.75' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E")}
+    .hex{position:absolute;inset:0;z-index:-1;overflow:hidden}.hex:before{content:'F3263F1D5207C3EA18603AA424DF13498E4B03CB03B1A1EE99CBE054AEAC57E9D922DAC67C79BB9E7A9D9E4B2B993801A8C9EE5002224412962603E1E8E69090805640F34AC34BA25534E50C79ECC0CE1145DBED6D36B725013FD184273BDD1B1FA7F1D11D03E7EB729E58DA2551683EDD1591B56FA9D31D6A31D536497F8ED858BBE63CC2EBA';position:absolute;top:26px;left:50%;transform:translateX(-50%);width:1100px;color:#fff;opacity:.08;font-family:ui-monospace,monospace;font-size:14px;line-height:1.8;word-break:break-all;text-align:center}.orb{position:absolute;width:520px;height:520px;left:50%;top:70px;transform:translateX(-50%);background:radial-gradient(circle,var(--glow),transparent 64%);filter:blur(20px);z-index:-2}
+    header{position:sticky;top:0;z-index:5;background:rgba(5,5,5,.68);backdrop-filter:blur(16px);border-bottom:1px solid rgba(255,255,255,.08)}.nav{height:78px;display:flex;align-items:center;justify-content:space-between}.brand{display:flex;align-items:center;gap:12px;font-size:23px;font-weight:950;letter-spacing:-.06em}.logo{width:38px;height:38px;border:1px solid #fff;border-radius:12px;display:grid;place-items:center;background:#fff;color:#000;box-shadow:0 0 40px rgba(255,255,255,.18)}.links{display:flex;gap:24px;color:var(--muted);font-size:14px}.links a:hover{color:#fff}.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;border:1px solid #fff;border-radius:999px;background:#fff;color:#000;padding:13px 19px;font-weight:850;box-shadow:0 0 40px rgba(255,255,255,.08)}.btn.ghost{background:#090909;color:#fff;border-color:#333;box-shadow:none}.btn:hover{transform:translateY(-1px)}
+    .hero{position:relative;padding:96px 0 84px;text-align:center}.eyebrow{display:inline-flex;align-items:center;gap:9px;border:1px solid #2d2d2d;border-radius:999px;padding:9px 14px;background:rgba(255,255,255,.04);color:#d9d9d9;font-size:14px}.hero h1{font-size:clamp(48px,9vw,108px);line-height:.86;margin:24px auto 24px;max-width:980px;letter-spacing:-.095em}.hero p{color:#bdbdbd;font-size:clamp(17px,2vw,22px);line-height:1.65;max-width:790px;margin:0 auto 32px}.actions{display:flex;justify-content:center;gap:14px;flex-wrap:wrap}.hero-card{margin:54px auto 0;max-width:860px;border:1px solid #262626;border-radius:28px;background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.025));padding:18px;box-shadow:0 35px 120px rgba(0,0,0,.5)}.terminal{border-radius:20px;background:#020202;border:1px solid #1d1d1d;text-align:left;overflow:hidden}.bar{display:flex;gap:7px;padding:14px 16px;border-bottom:1px solid #1b1b1b}.dot{width:10px;height:10px;border-radius:50%;background:#fff;opacity:.25}.terminal pre{margin:0;padding:22px;color:#e7e7e7;white-space:pre-wrap;font:14px/1.8 ui-monospace,monospace}.muted{color:#777}.cmd{color:#fff;font-weight:800}
+    .section{padding:74px 0}.split{display:grid;grid-template-columns:1fr auto;gap:24px;align-items:end;margin-bottom:28px}.kicker{color:#aaa;text-transform:uppercase;letter-spacing:.18em;font-size:12px;font-weight:800}.section h2{font-size:clamp(34px,5vw,62px);line-height:.95;letter-spacing:-.07em;margin:10px 0}.section .lead{color:#aaa;max-width:680px;line-height:1.65}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.feature{position:relative;min-height:230px;background:linear-gradient(180deg,#111,#080808);border:1px solid var(--line);border-radius:28px;padding:26px;overflow:hidden}.feature:after{content:'';position:absolute;right:-70px;top:-70px;width:170px;height:170px;background:radial-gradient(circle,rgba(255,255,255,.12),transparent 65%)}.icon{font-size:28px;margin-bottom:22px}.feature h3{font-size:22px;margin:0 0 10px}.feature p{color:#a7a7a7;line-height:1.65;margin:0}.mock{border:1px solid #252525;border-radius:26px;background:#0b0b0b;padding:18px}.mock-head{display:flex;justify-content:space-between;color:#777;border-bottom:1px solid #222;padding:0 0 14px}.mock-row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:15px 0;border-bottom:1px solid #181818}.tag{border:1px solid #333;border-radius:999px;padding:6px 10px;color:#ddd;background:#111;font-size:12px}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.stat{border:1px solid #252525;border-radius:28px;padding:30px;background:#0a0a0a;text-align:center}.num{font-size:52px;font-weight:950;letter-spacing:-.06em}.label{color:#999}.builds{display:grid;gap:14px}.build{display:block;border:1px solid #252525;border-radius:22px;padding:20px;background:#0a0a0a}.build span{font:12px ui-monospace,monospace;color:#888}.build strong{display:block;font-size:19px;margin:7px 0}.build small{color:#999;line-height:1.5}.pricing{display:grid;grid-template-columns:1fr 1fr;gap:18px}.price{border:1px solid #292929;border-radius:30px;padding:30px;background:#090909}.price.hot{background:#fff;color:#000}.price h3{font-size:28px;margin:0}.price .money{font-size:50px;font-weight:950;letter-spacing:-.07em;margin:18px 0}.price ul{list-style:none;padding:0;margin:20px 0;display:grid;gap:12px}.price li:before{content:'✓';margin-right:10px}.price.hot .btn{background:#000;color:#fff;border-color:#000}.cta{border:1px solid #2b2b2b;border-radius:34px;background:radial-gradient(circle at 50% 0,rgba(255,255,255,.13),transparent 34%),#080808;padding:56px;text-align:center}.cta h2{margin-top:0}.footer{border-top:1px solid #1f1f1f;padding:32px 0;color:#777;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+    @media(max-width:860px){.links{display:none}.hero{text-align:left}.actions{justify-content:flex-start}.grid,.pricing,.stats{grid-template-columns:1fr}.split{grid-template-columns:1fr}.hero h1{letter-spacing:-.075em}.cta{padding:34px 22px}}
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <nav class="nav"><div class="brand">Kolsec</div><div class="links"><a href="#features">Features</a><a href="#api">API</a><a href="/health">Status</a></div><a class="btn dark" href="#start">Launch Bot</a></nav>
-    <section class="hero"><span class="pill">Black & white Lua protection platform</span><h1>Whitelist, host, and protect Lua scripts.</h1><p>Kolsec gives your Discord server license keys, HWID resets, hosted loadstrings, script panels, and obfuscation powered by your API.</p><div class="actions"><a class="btn" href="#start">Get Started</a><a class="btn dark" href="#api">View API</a></div></section>
-    <section class="stats"><div class="stat"><div class="num">${scriptCount}</div><div class="label">Products</div></div><div class="stat"><div class="num">${keyCount}</div><div class="label">Keys</div></div><div class="stat"><div class="num">${hostedCount}</div><div class="label">Hosted Scripts</div></div></section>
-    <section id="features" class="grid"><div class="card"><h3>Discord Panel</h3><p>Use <code>/setup</code> to post a redeem/reset/my-keys panel directly in your server.</p></div><div class="card"><h3>Hosted Loadstrings</h3><p>Use <code>/hostscript</code> to host Lua on Render and get a Roblox-style loadstring URL.</p></div><div class="card"><h3>Obfuscation</h3><p>Use <code>/obfuscate</code> or obfuscate while hosting through your configured API.</p></div><div class="card"><h3>License Keys</h3><p>Create scripts, generate expiring keys, revoke access, and track redeemed users.</p></div><div class="card"><h3>HWID Locking</h3><p>The verification API binds a redeemed key to the first HWID that checks in.</p></div><div class="card"><h3>REST API</h3><p>Your loader can verify keys with <code>POST /api/verify</code>.</p></div></section>
-    <section id="api" class="panel"><h2>Loader hosting</h2><p>Hosted scripts are served at:</p><p><code>/script/&lt;host_id&gt;.lua</code></p><p>Loadstring redirect/snippet endpoint:</p><p><code>/loadstring/&lt;host_id&gt;</code></p></section>
-    <section id="start" class="panel"><h2>Discord Commands</h2><p><code>/setup</code> <code>/createscript</code> <code>/genkey</code> <code>/hostscript</code> <code>/obfuscate</code> <code>/redeem</code> <code>/reset-hwid</code></p><p>Commands are inside <strong>server.js</strong> and deploy automatically when the bot starts if <code>CLIENT_ID</code> is set.</p></section>
-    <footer class="footer">Kolsec © ${new Date().getFullYear()} — original black and white license platform.</footer>
-  </div>
+  <div class="noise"></div>
+  <header><div class="wrap nav"><a class="brand" href="/"><span class="logo">K</span> Kolsec</a><nav class="links"><a href="#features">Features</a><a href="#builds">Builds</a><a href="#pricing">Pricing</a><a href="#start">Commands</a></nav><a class="btn ghost" href="#start">Enter the lab</a></div></header>
+  <main>
+    <section class="hero"><div class="hex"></div><div class="orb"></div><div class="wrap"><span class="eyebrow">✦ The black and white standard for Lua security</span><h1>Protect. Monetize. Earn.</h1><p>Drop your project, get a protected hosted build, and monetize with confidence. Kolsec handles HWID-locks, whitelist keys, Discord panels, and loadstrings from one Render service.</p><div class="actions"><a class="btn" href="#start">Enter the lab</a><a class="btn ghost" href="#how">How it works</a></div><div class="hero-card"><div class="terminal"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div><pre><span class="muted">$</span> <span class="cmd">/apply</span> name:Project code:loader.lua obfuscate:true
+<span class="muted">Kolsec:</span> protected build created
+<span class="muted">Loadstring:</span> loadstring(game:HttpGet("${publicBaseUrl()}/script/host_xxxxx.lua"))()</pre></div></div></div></section>
+    <section id="features" class="section"><div class="wrap"><div class="split"><div><div class="kicker">Kolsec features</div><h2>Everything you need to ship and protect.</h2><p class="lead">An original Kolsec landing page with the same kind of product sections you wanted, but with fresh branding and styling.</p></div></div><div class="grid"><article class="feature"><div class="icon">🧩</div><h3>Custom Obfuscation</h3><p>Send code through your configured obfuscator API while applying or hosting scripts.</p></article><article class="feature"><div class="icon">🔐</div><h3>Whitelist System</h3><p>Generate keys, redeem from the panel, assign buyer roles, revoke access, and reset HWIDs.</p></article><article class="feature"><div class="icon">🤖</div><h3>Discord Bot</h3><p>Clean slash commands: /setup, /generatekey, /apply, /hostscript, and /resethwid.</p></article><article class="feature"><div class="icon">📊</div><h3>Dashboard Feel</h3><p>Live website stats show products, generated keys, and hosted scripts from the database.</p></article><article class="feature"><div class="icon">🖥️</div><h3>HWID Tracker</h3><p>Bind keys to the first device that verifies and reset them from Discord when needed.</p></article><article class="feature"><div class="icon">⚡</div><h3>Hosted Loadstrings</h3><p>Render serves your Lua at /script/&lt;id&gt;.lua with a ready-to-copy loadstring endpoint.</p></article></div></div></section>
+    <section id="how" class="section"><div class="wrap"><div class="split"><div><div class="kicker">Create a script in seconds</div><h2>Ship straight from Discord.</h2><p class="lead">Run /apply, save the API secret, generate keys, then let customers use the panel.</p></div><div class="mock"><div class="mock-head"><span>Kolsec Panel</span><span>online</span></div><div class="mock-row"><strong>📜 View Script</strong><span class="tag">loadstring</span></div><div class="mock-row"><strong>🔑 Redeem Key</strong><span class="tag">whitelist</span></div><div class="mock-row"><strong>⚙️ Reset HWID</strong><span class="tag">support</span></div></div></div><div class="stats"><div class="stat"><div class="num">${scriptCount}</div><div class="label">products created</div></div><div class="stat"><div class="num">${keyCount}</div><div class="label">keys generated</div></div><div class="stat"><div class="num">${hostedCount}</div><div class="label">scripts hosted</div></div></div></div></section>
+    <section id="builds" class="section"><div class="wrap"><div class="kicker">Kolsec latest builds</div><h2>Shipping every week.</h2><p class="lead">Recent hosted scripts and deployment status appear here.</p><div class="builds">${buildCards}</div></div></section>
+    <section id="pricing" class="section"><div class="wrap"><div class="kicker">Kolsec pricing</div><h2>Simple plans. Real protection.</h2><div class="pricing"><div class="price"><h3>Citizen</h3><div class="money">$0<span style="font-size:18px;color:#888">/forever</span></div><ul><li>Discord bot panel</li><li>Whitelist keys</li><li>Hosted loadstrings</li><li>HWID resets</li><li>Basic protection flow</li></ul><a class="btn ghost" href="#start">Get Started Free</a></div><div class="price hot"><h3>Royal</h3><div class="money">$3<span style="font-size:18px;color:#555">/month</span></div><ul><li>Unlimited hosted scripts</li><li>Obfuscation pipeline</li><li>Priority support</li><li>Buyer role automation</li><li>Early access features</li></ul><a class="btn" href="#start">Upgrade to Royal</a></div></div></div></section>
+    <section id="start" class="section"><div class="wrap"><div class="cta"><h2>Ready to take back control?</h2><p class="lead" style="margin:0 auto 24px">Use these commands in Discord after the bot starts on Render.</p><p><code>/help</code> <code>/status</code> <code>/setup</code> <code>/panel</code> <code>/apply</code> <code>/createscript</code> <code>/scripts</code> <code>/generatekey</code> <code>/genkey</code> <code>/redeem</code> <code>/keyinfo</code> <code>/mykeys</code> <code>/freekey</code> <code>/getrole</code> <code>/viewscript</code> <code>/resethwid</code> <code>/reset-hwid</code> <code>/revoke</code> <code>/extendkey</code> <code>/deletekey</code> <code>/hostscript</code> <code>/obfuscate</code> <code>/loader</code></p><div class="actions"><a class="btn" href="/health">Check Status</a><a class="btn ghost" href="/hosted">View Hosted Scripts</a></div></div></div></section>
+  </main>
+  <div class="wrap footer"><span>Kolsec © ${new Date().getFullYear()}</span><span>Lua Code Protection & Licensing</span></div>
 </body>
 </html>`;
 }
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
 
 // ---------------- Express API ----------------
 function startApiServer() {
