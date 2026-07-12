@@ -1,6 +1,3 @@
-// server.js
-// Single-file Node.js Discord license bot. No ./src folder needed.
-
 require('dotenv').config();
 
 const express = require('express');
