@@ -38,6 +38,9 @@ const {
   SESSION_SECRET,
   DISCORD_INVITE_URL = 'https://discord.com',
   OWNER_ID = '1207803375807373415',
+  SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY,
+  SUPABASE_ANON_KEY,
   RESET_COOLDOWN_HOURS = '24',
   MAX_SCRIPTS_PER_USER = '5'
 } = process.env;
@@ -91,6 +94,7 @@ const commands = [
     .setDescription('Create/apply a protected script and host its loadstring')
     .addStringOption(o => o.setName('name').setDescription('Script name').setRequired(true).setMaxLength(80))
     .addStringOption(o => o.setName('code').setDescription('Lua code to host, max 4000 chars').setRequired(true).setMaxLength(4000))
+    .addStringOption(o => o.setName('script_id').setDescription('Script ID from /createscript or /apply to attach this host to').setRequired(false))
     .addBooleanOption(o => o.setName('obfuscate').setDescription('Obfuscate before hosting'))
     .addStringOption(o => o.setName('level').setDescription('Obfuscation level').setRequired(false).addChoices(
       { name: 'Light', value: 'light' },
@@ -311,6 +315,7 @@ CREATE TABLE IF NOT EXISTS hosted_scripts (
   name TEXT NOT NULL,
   code TEXT NOT NULL,
   source_code TEXT,
+  linked_script_id TEXT,
   obfuscated INTEGER NOT NULL DEFAULT 0,
   created_by TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -376,6 +381,7 @@ CREATE INDEX IF NOT EXISTS idx_licenses_script ON licenses(script_id);
 CREATE INDEX IF NOT EXISTS idx_licenses_user ON licenses(discord_user_id);
 CREATE INDEX IF NOT EXISTS idx_hosted_scripts_guild ON hosted_scripts(guild_id);
 CREATE INDEX IF NOT EXISTS idx_hosted_scripts_user ON hosted_scripts(created_by);
+CREATE INDEX IF NOT EXISTS idx_hosted_scripts_linked ON hosted_scripts(linked_script_id);
 CREATE INDEX IF NOT EXISTS idx_premium_codes_redeemed_by ON premium_codes(redeemed_by);
 `);
 
@@ -396,7 +402,9 @@ for (const migration of [
   'ALTER TABLE website_users ADD COLUMN twofa_enabled INTEGER NOT NULL DEFAULT 0',
   'ALTER TABLE website_users ADD COLUMN twofa_secret TEXT',
   "ALTER TABLE website_users ADD COLUMN plan TEXT NOT NULL DEFAULT 'free'",
-  "ALTER TABLE website_users ADD COLUMN script_quota INTEGER NOT NULL DEFAULT 5"
+  "ALTER TABLE website_users ADD COLUMN script_quota INTEGER NOT NULL DEFAULT 5",
+  "ALTER TABLE hosted_scripts ADD COLUMN source_code TEXT",
+  "ALTER TABLE hosted_scripts ADD COLUMN linked_script_id TEXT"
 ]) {
   try { db.prepare(migration).run(); } catch (_) {}
 }
@@ -483,13 +491,88 @@ function createScript({ guildId, name, createdBy }) {
   return { id, name, apiSecret };
 }
 
-function createHostedScript({ guildId, name, code, sourceCode, obfuscated, createdBy }) {
-  const id = makeId('host');
-  db.prepare(`
-    INSERT INTO hosted_scripts (id, guild_id, name, code, source_code, obfuscated, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(id, guildId, name, code, sourceCode || code, obfuscated ? 1 : 0, createdBy);
-  return { id, name, code, source_code: sourceCode || code, obfuscated: Boolean(obfuscated) };
+function createHostedScript({ guildId, name, code, sourceCode, linkedScriptId, obfuscated, createdBy }) {
+  let id = makeId('host');
+  const existing = linkedScriptId
+    ? db.prepare('SELECT * FROM hosted_scripts WHERE guild_id = ? AND linked_script_id = ?').get(guildId, linkedScriptId)
+    : null;
+
+  if (existing) {
+    id = existing.id;
+    db.prepare(`
+      UPDATE hosted_scripts
+      SET name = ?, code = ?, source_code = ?, linked_script_id = ?, obfuscated = ?, created_by = ?
+      WHERE id = ?
+    `).run(name, code, sourceCode || code, linkedScriptId || null, obfuscated ? 1 : 0, createdBy, id);
+  } else {
+    db.prepare(`
+      INSERT INTO hosted_scripts (id, guild_id, name, code, source_code, linked_script_id, obfuscated, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, guildId, name, code, sourceCode || code, linkedScriptId || null, obfuscated ? 1 : 0, createdBy);
+  }
+
+  const script = { id, guild_id: guildId, name, code, source_code: sourceCode || code, linked_script_id: linkedScriptId || null, obfuscated: Boolean(obfuscated), created_by: createdBy };
+  saveHostedScriptToSupabase(script).catch(err => console.warn('Supabase save failed:', err.message));
+  return { id, name, code, source_code: sourceCode || code, linked_script_id: linkedScriptId || null, obfuscated: Boolean(obfuscated) };
+}
+
+function supabaseConfig() {
+  const key = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
+  if (!SUPABASE_URL || !key) return null;
+  return { url: SUPABASE_URL.replace(/\/$/, ''), key };
+}
+
+async function saveHostedScriptToSupabase(script) {
+  const cfg = supabaseConfig();
+  if (!cfg) return;
+  const row = {
+    id: script.id,
+    guild_id: script.guild_id,
+    name: script.name,
+    code: script.code,
+    source_code: script.source_code || script.code,
+    linked_script_id: script.linked_script_id || null,
+    obfuscated: script.obfuscated ? 1 : 0,
+    created_by: script.created_by
+  };
+  const res = await fetch(`${cfg.url}/rest/v1/hosted_scripts?id=eq.${encodeURIComponent(script.id)}`, {
+    method: 'PATCH',
+    headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    body: JSON.stringify(row)
+  });
+  if (res.status === 204) return;
+  const insert = await fetch(`${cfg.url}/rest/v1/hosted_scripts`, {
+    method: 'POST',
+    headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify(row)
+  });
+  if (!insert.ok && insert.status !== 201) throw new Error(await insert.text());
+}
+
+async function hydrateHostedScriptsFromSupabase() {
+  const cfg = supabaseConfig();
+  if (!cfg) return;
+  const res = await fetch(`${cfg.url}/rest/v1/hosted_scripts?select=*`, {
+    headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}` }
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const rows = await res.json();
+  const stmt = db.prepare(`
+    INSERT INTO hosted_scripts (id, guild_id, name, code, source_code, linked_script_id, obfuscated, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      guild_id=excluded.guild_id,
+      name=excluded.name,
+      code=excluded.code,
+      source_code=excluded.source_code,
+      linked_script_id=excluded.linked_script_id,
+      obfuscated=excluded.obfuscated,
+      created_by=excluded.created_by
+  `);
+  for (const r of rows) {
+    stmt.run(r.id, r.guild_id || 'web', r.name || r.id, r.code || '', r.source_code || r.code || '', r.linked_script_id || null, r.obfuscated ? 1 : 0, r.created_by || 'unknown');
+  }
+  console.log(`Hydrated ${rows.length} hosted scripts from Supabase.`);
 }
 
 function publicBaseUrl() {
@@ -1055,6 +1138,11 @@ async function handleCommand(interaction) {
   if (commandName === 'apply') {
     const name = interaction.options.getString('name', true);
     const originalCode = interaction.options.getString('code', true);
+    const linkedScriptId = interaction.options.getString('script_id', false);
+    if (linkedScriptId) {
+      const product = db.prepare('SELECT * FROM scripts WHERE id = ? AND guild_id = ?').get(linkedScriptId, interaction.guildId);
+      if (!product) return interaction.reply({ ephemeral: true, content: 'Invalid script_id. Use `/createscript` first, then use that script ID here.' });
+    }
     const shouldObfuscate = interaction.options.getBoolean('obfuscate') || false;
     const level = interaction.options.getString('level') || 'standard';
 
@@ -1077,6 +1165,7 @@ async function handleCommand(interaction) {
       name,
       code: String(finalCode),
       sourceCode: originalCode,
+      linkedScriptId,
       obfuscated: shouldObfuscate,
       createdBy: interaction.user.id
     });
@@ -1189,6 +1278,7 @@ async function handleCommand(interaction) {
       name,
       code: String(finalCode),
       sourceCode: originalCode,
+      linkedScriptId: script.id,
       obfuscated: shouldObfuscate,
       createdBy: interaction.user.id
     });
@@ -1199,7 +1289,7 @@ async function handleCommand(interaction) {
     const loadstring = makeLoaderSnippet(hosted.id);
 
     await interaction.editReply({
-      content: `Hosted **${name}** ${shouldObfuscate ? '(obfuscated)' : ''}.\n\nRaw script URL:\n${rawUrl}\n\nLoadstring URL:\n${loadstringUrl}\n\nLoadstring:\n\`\`\`lua\n${loadstring}\n\`\`\``
+      content: `Hosted **${name}** ${shouldObfuscate ? '(obfuscated)' : ''}${linkedScriptId ? ` for script ID \`${linkedScriptId}\`` : ''}.\n\nRaw script URL:\n${rawUrl}\n\nLoadstring URL:\n${loadstringUrl}\n\nLoadstring:\n\`\`\`lua\n${loadstring}\n\`\`\``
     });
     await logGuild(interaction.guild, `🌐 Script \`${name}\` hosted by <@${interaction.user.id}>. ID: \`${hosted.id}\``);
     return;
@@ -1244,7 +1334,7 @@ async function sendHostedScripts(interaction) {
   const settings = getSettings(interaction.guildId);
   let rows;
   if (settings?.panel_script_id) {
-    rows = db.prepare('SELECT id, name, obfuscated, created_at FROM hosted_scripts WHERE id = ? LIMIT 1').all(settings.panel_script_id);
+    rows = db.prepare('SELECT id, name, obfuscated, created_at FROM hosted_scripts WHERE id = ? OR linked_script_id = ? ORDER BY created_at DESC LIMIT 1').all(settings.panel_script_id, settings.panel_script_id);
   } else {
     rows = db.prepare('SELECT id, name, obfuscated, created_at FROM hosted_scripts ORDER BY created_at DESC LIMIT 500').all();
   }
@@ -1884,6 +1974,7 @@ function startApiServer() {
     console.error('Slash command deploy failed:', error);
   }
 
+  try { await hydrateHostedScriptsFromSupabase(); } catch (error) { console.warn('Supabase hydrate failed:', error.message); }
   startApiServer();
   await client.login(DISCORD_TOKEN);
 })();
