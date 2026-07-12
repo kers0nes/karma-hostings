@@ -1,13 +1,17 @@
 {
-  "name": "duel-panel-bot",
+  "name": "polsec-like-bot",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "Polsec-like Discord licensing bot with setup panels",
+  "main": "src/index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node src/index.js",
+    "deploy": "node src/deploy-commands.js",
+    "dev": "node --watch src/index.js"
   },
   "dependencies": {
-    "discord.js": "^14.14.1",
-    "sqlite3": "^5.1.6",
-    "dotenv": "^16.3.1"
+    "better-sqlite3": "^11.9.1",
+    "discord.js": "^14.18.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
   }
 }
