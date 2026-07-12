@@ -414,29 +414,87 @@ function publicBaseUrl() {
   return `http://localhost:${process.env.PORT || process.env.API_PORT || 3000}`;
 }
 
-function kers0neLocalObfuscate(luaCode) {
-  // Kers0ne-style local obfuscator based on the protected output format the user provided.
-  // The uploaded file is protected output, not reusable source code, so this generator emits
-  // the same style: banner, randomized locals, encoded byte table, rolling XOR decoder,
-  // checksum/anti-tamper checks, and a loadstring wrapper.
+function makeLoaderSnippet(scriptId) {
+  return `loadstring(game:HttpGet("${publicBaseUrl()}/loadstring/${scriptId}"))()`;
+}
+
+function makeProtectedLoader(rawUrl) {
+  const home = publicBaseUrl();
+  return `--[[
+\tKarma Sources Protected Loader
+\tAnti-Dump Hardening: enabled
+]]
+return(function(...)
+  local _home=${JSON.stringify(home)}
+  local _url=${JSON.stringify(rawUrl)}
+  local function _safe(fn,...) local ok,res=pcall(fn,...) if ok then return res end return nil end
+  local function _tamper()
+    if setclipboard then _safe(setclipboard,_home) end
+    if warn then _safe(warn,"Karma loader protection triggered: ".._home) end
+    return nil
+  end
+  local function _anti()
+    if type(loadstring)~="function" then return false end
+    if type(game)~="userdata" and type(game)~="table" then return false end
+    local _g=(getgenv and _safe(getgenv)) or _G or {}
+    if rawget(_g,"KARMA_FORCE_TAMPER") or rawget(_g,"DUMPING_KARMA") then return false end
+    if debug and debug.getinfo then
+      local ok,info=pcall(debug.getinfo,1,"Sln")
+      if ok and info and tostring(info.source):lower():find("decompile") then return false end
+    end
+    return true
+  end
+  if not _anti() then return _tamper() end
+  local _src
+  if game and game.HttpGet then _src=game:HttpGet(_url) end
+  if type(_src)~="string" or #_src<1 then return _tamper() end
+  local _ok,_fn=pcall(loadstring,_src,"KarmaLoaderPayload")
+  if not _ok or type(_fn)~="function" then return _tamper() end
+  return _fn(...)
+end)(...)
+`;
+}
+
+function kers0neLocalObfuscate(luaCode, opts = {}) {
+  // Stronger Kers0ne-style local obfuscator.
+  // Note: no client-side Lua obfuscator is impossible to reverse, but this adds
+  // heavier encoding, randomized runtime names, decoys, integrity checks, and
+  // anti-tamper probes while keeping normal execution working.
   const source = String(luaCode);
-  const seed = crypto.randomBytes(1)[0] || 173;
-  let prev = 0;
-  const encoded = Array.from(Buffer.from(source, 'utf8'), (byte, index) => {
+  const strength = Math.max(1, Math.min(3, Number(opts.strength || 2)));
+  const bytes = Buffer.from(source, 'utf8');
+  const seedA = (crypto.randomBytes(1)[0] || 173) & 255;
+  const seedB = (crypto.randomBytes(1)[0] || 91) & 255;
+  const salt = crypto.randomBytes(2).readUInt16BE(0);
+  const home = publicBaseUrl();
+
+  let prev = seedB;
+  const encoded = Array.from(bytes, (byte, index) => {
     const i = index + 1;
-    const enc = byte ^ ((seed + i * 37 + prev) & 255);
-    prev = enc;
+    const rolling = (seedA + (i * 37) + ((i % 7) * seedB) + prev + (salt & 255)) & 255;
+    const enc = byte ^ rolling;
+    prev = (enc + i + seedB) & 255;
     return enc;
   });
-  const checksum = Buffer.from(source, 'utf8').reduce((a, b) => (a + b) % 65521, 1);
+
+  const checksumA = bytes.reduce((a, b) => (a + b) % 65521, 1);
+  const checksumB = bytes.reduce((a, b, i) => (a ^ ((b + i * 131) & 0xffffffff)) >>> 0, 2166136261) >>> 0;
+  const decoyText = `print(${JSON.stringify('Karma Sources protected build')})`;
+  const decoyBytes = Array.from(Buffer.from(decoyText, 'utf8'), (b, i) => b ^ ((seedB + i * 19) & 255));
+
   const chunks = [];
-  for (let i = 0; i < encoded.length; i += 24) chunks.push(encoded.slice(i, i + 24).join(','));
-  const names = Array.from({ length: 16 }, () => `_${crypto.randomBytes(2).toString('hex')}`);
-  const [nChar, nBand, nBxor, nConcat, nByte, nAssert, nLoad, nData, nOut, nSeed, nPrev, nChk, nPcall, nType, nErr, nHome] = names;
-  const home = publicBaseUrl();
+  const chunkSize = strength === 3 ? 18 : strength === 2 ? 24 : 32;
+  for (let i = 0; i < encoded.length; i += chunkSize) chunks.push(encoded.slice(i, i + chunkSize).join(','));
+  const decoyChunks = [];
+  for (let i = 0; i < decoyBytes.length; i += 20) decoyChunks.push(decoyBytes.slice(i, i + 20).join(','));
+
+  const names = Array.from({ length: 28 }, () => `_${crypto.randomBytes(3).toString('hex')}`);
+  const [nChar, nBand, nBxor, nConcat, nByte, nLoad, nPcall, nType, nData, nDecoy, nOut, nSeedA, nSeedB, nSalt, nPrev, nChkA, nChkB, nHome, nTamper, nProbe, nWipe, nLen, nGetfenv, nRawget, nPairs, nTable, nMath, nSelect] = names;
+  const junkNumbers = Array.from({ length: 12 }, () => crypto.randomInt(10, 999)).join(',');
 
   return `--[[
 \tProtected By Kers0ne Obfuscator
+\tAnti-Dump Hardening: enabled
 ]]
 
 return(function(...)
@@ -445,34 +503,95 @@ return(function(...)
   local ${nBxor}=bit32.bxor
   local ${nConcat}=table.concat
   local ${nByte}=string.byte
-  local ${nAssert}=assert
   local ${nLoad}=loadstring
   local ${nPcall}=pcall
   local ${nType}=type
-  local ${nErr}=error
+  local ${nGetfenv}=getfenv
+  local ${nRawget}=rawget
+  local ${nPairs}=pairs
+  local ${nTable}=table
+  local ${nMath}=math
+  local ${nSelect}=select
   local ${nHome}=${JSON.stringify(home)}
-  local ${nSeed}=${seed}
+  local ${nSeedA}=${seedA}
+  local ${nSeedB}=${seedB}
+  local ${nSalt}=${salt}
+  local ${nLen}=${bytes.length}
   local ${nData}={${chunks.join(',')}}
-  local ${nOut}={}
-  local ${nPrev}=0
-  local function _tamper()
-    -- If a dumper breaks this wrapper, point them back to the homepage and stop the dumped copy.
+  local ${nDecoy}={${decoyChunks.join(',')}}
+  local _junk={${junkNumbers}}
+
+  local function ${nTamper}(...)
+    -- If a dumper/tamper breaks the wrapper, give it a useless decoy and point back home.
     if setclipboard then ${nPcall}(setclipboard,${nHome}) end
-    if warn then ${nPcall}(warn,"Kers0ne protection triggered: "..${nHome}) end
+    if warn then ${nPcall}(warn,"Karma protection triggered: "..${nHome}) end
+    local _d={}
+    for _i=1,#${nDecoy} do _d[_i]=${nChar}(${nBxor}(${nDecoy}[_i],${nBand}(${nSeedB}+(_i-1)*19,255))) end
+    local _fake=${nConcat}(_d)
+    if ${nType}(${nLoad})=="function" then local _ok,_fn=${nPcall}(${nLoad},_fake,"KarmaDecoy") if _ok and ${nType}(_fn)=="function" then return _fn(...) end end
     return nil
   end
-  if ${nType}(${nLoad})~="function" or ${nType}(${nConcat})~="function" then return _tamper() end
+
+  local function ${nProbe}()
+    -- Luraph-inspired environment/integrity validation, tuned to avoid false errors in normal execution.
+    if ${nType}(${nLoad})~="function" or ${nType}(${nConcat})~="function" or ${nType}(${nByte})~="function" then return false end
+    local _ok1,_r1=${nPcall}(${nByte},"K",1)
+    if not _ok1 or _r1~=75 then return false end
+    local _ok2,_r2=${nPcall}(${nConcat},{"K","S"})
+    if not _ok2 or _r2~="KS" then return false end
+    local _g=(${nGetfenv} and ${nGetfenv}(0)) or _G or {}
+    if ${nRawget}(_g,"KARMA_FORCE_TAMPER") or ${nRawget}(_g,"DUMPING_KARMA") then return false end
+    local suspicious={"getscriptbytecode","dumpstring","decompile"}
+    for _i=1,#suspicious do
+      local _v=${nRawget}(_g,suspicious[_i])
+      if ${nType}(_v)=="function" then return false end
+    end
+    if debug and debug.getinfo then
+      local _ok,_info=${nPcall}(debug.getinfo,1,"Sln")
+      if _ok and _info and _info.source and tostring(_info.source):lower():find("decomp") then return false end
+    end
+    if setfenv and ${nGetfenv} then
+      local _env={}
+      local _ok=${nPcall}(setfenv,function() return true end,_env)
+      if not _ok then return false end
+    end
+    local _mt={}
+    local _lock={}
+    local _okmt=${nPcall}(function() setmetatable(_mt,{__metatable=_lock}); return getmetatable(_mt)==_lock end)
+    if not _okmt then return false end
+    return true
+  end
+
+  local function ${nWipe}(_t)
+    for _i=1,#_t do _t[_i]=0 end
+  end
+
+  if not ${nProbe}() then return ${nTamper}(...) end
+
+  local ${nOut}={}
+  local ${nPrev}=${nSeedB}
   for _i=1,#${nData} do
     local _e=${nData}[_i]
-    ${nOut}[_i]=${nChar}(${nBxor}(_e,${nBand}(${nSeed}+_i*37+${nPrev},255)))
-    ${nPrev}=_e
+    local _r=${nBand}(${nSeedA}+(_i*37)+((_i%7)*${nSeedB})+${nPrev}+${nBand}(${nSalt},255),255)
+    ${nOut}[_i]=${nChar}(${nBxor}(_e,_r))
+    ${nPrev}=${nBand}(_e+_i+${nSeedB},255)
   end
+
   local _src=${nConcat}(${nOut})
-  local ${nChk}=1
-  for _i=1,#_src do ${nChk}=(${nChk}+${nByte}(_src,_i))%65521 end
-  if ${nChk}~=${checksum} then return _tamper() end
-  local _ok,_fn=${nPcall}(${nLoad},_src,"Kers0neObfuscated")
-  if not _ok or ${nType}(_fn)~="function" then return _tamper() end
+  if #_src~=${nLen} then ${nWipe}(${nData}) ${nWipe}(${nOut}) return ${nTamper}(...) end
+
+  local ${nChkA}=1
+  local ${nChkB}=2166136261
+  for _i=1,#_src do
+    local _b=${nByte}(_src,_i)
+    ${nChkA}=(${nChkA}+_b)%65521
+    ${nChkB}=${nBxor}(${nChkB},${nBand}(_b+(_i-1)*131,0xffffffff))
+  end
+  if ${nChkA}~=${checksumA} or ${nChkB}~=${checksumB} then ${nWipe}(${nData}) ${nWipe}(${nOut}) return ${nTamper}(...) end
+
+  local _ok,_fn=${nPcall}(${nLoad},_src,"KarmaProtected")
+  ${nWipe}(${nData}); ${nWipe}(${nOut}); ${nWipe}(_junk)
+  if not _ok or ${nType}(_fn)~="function" then return ${nTamper}(...) end
   return _fn(...)
 end)(...)
 `;
@@ -508,7 +627,7 @@ async function callObfuscator(luaCode, level = 'standard') {
   if (selected === 'max' || selected === 'maximum') {
     // Stronger local mode: wrap once, then wrap the protected output again.
     // This is heavier, but keeps execution working while making static dumps harder.
-    return kers0neLocalObfuscate(kers0neLocalObfuscate(luaCode, { strength: 2 }), { strength: 3 });
+    return kers0neLocalObfuscate(kers0neLocalObfuscate(kers0neLocalObfuscate(luaCode, { strength: 3 }), { strength: 3 }), { strength: 3 });
   }
   return kers0neLocalObfuscate(luaCode, { strength: 2 });
 }
@@ -831,7 +950,7 @@ async function handleCommand(interaction) {
 
     const base = publicBaseUrl();
     const rawUrl = `${base}/script/${hosted.id}.lua`;
-    const loadstring = `loadstring(game:HttpGet("${rawUrl}"))()`;
+    const loadstring = makeLoaderSnippet(hosted.id);
 
     await interaction.editReply({
       content: `Applied **${name}** successfully.\n\nScript ID:\n\`${script.id}\`\n\nAPI Secret, save this now:\n\`${script.apiSecret}\`\n\nHosted Script:\n${rawUrl}\n\nLoadstring:\n\`\`\`lua\n${loadstring}\n\`\`\``
@@ -917,7 +1036,7 @@ async function handleCommand(interaction) {
     const base = publicBaseUrl();
     const rawUrl = `${base}/script/${hosted.id}.lua`;
     const loadstringUrl = `${base}/loadstring/${hosted.id}`;
-    const loadstring = `loadstring(game:HttpGet("${rawUrl}"))()`;
+    const loadstring = makeLoaderSnippet(hosted.id);
 
     await interaction.editReply({
       content: `Hosted **${name}** ${shouldObfuscate ? '(obfuscated)' : ''}.\n\nRaw script URL:\n${rawUrl}\n\nLoadstring URL:\n${loadstringUrl}\n\nLoadstring:\n\`\`\`lua\n${loadstring}\n\`\`\``
@@ -965,7 +1084,7 @@ async function sendHostedScripts(interaction) {
   const rows = db.prepare('SELECT id, name, obfuscated, created_at FROM hosted_scripts WHERE guild_id = ? OR created_by = ? ORDER BY created_at DESC LIMIT 500').all(interaction.guildId, OWNER_ID);
   const base = publicBaseUrl();
   const content = rows.length
-    ? rows.map(r => `**${r.name}** ${r.obfuscated ? '(obfuscated)' : ''}\nLoadstring:\n\`\`\`lua\nloadstring(game:HttpGet("${base}/script/${r.id}.lua"))()\n\`\`\``).join('\n')
+    ? rows.map(r => `**${r.name}** ${r.obfuscated ? '(obfuscated)' : ''}\nLoadstring:\n\`\`\`lua\n${makeLoaderSnippet(r.id)}\n\`\`\``).join('\n')
     : 'No hosted scripts yet. Staff can use `/hostscript` or `/apply`.';
 
   if (interaction.deferred || interaction.replied) await interaction.followUp({ ephemeral: true, content });
@@ -1119,7 +1238,7 @@ function discordDashboardPage(user, req = { query: {} }) {
 
   let content = '';
   if (tab === 'scripts') {
-    content = selected ? `<div class="card"><div class="cardHead"><div><p class="eyebrow">Selected Script</p><h2>${escapeHtml(selected.name)}</h2><p class="muted">${selected.obfuscated ? 'Obfuscated build · edits auto re-obfuscate on save' : 'Plain build'} · ${escapeHtml(selected.created_at)}</p></div></div><h3>Loadstring</h3><code class="block">loadstring(game:HttpGet("${publicBaseUrl()}/script/${selected.id}.lua"))()</code><h3>Edit Script</h3><form method="post" action="/dashboard/scripts/${selected.id}/update"><label>Script name</label><input name="name" maxlength="80" value="${escapeHtml(selected.name)}" required><label>Source / Output</label><textarea name="code" maxlength="4000" required>${escapeHtml(selected.code)}</textarea><div class="buttonRow"><button type="submit">Save Script</button><button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate Download</button><button class="danger" type="submit" formaction="/dashboard/scripts/${selected.id}/delete" formmethod="post">Delete Script</button></div></form></div>` : `<div class="card"><h2>Scripts</h2><p class="muted">Create a script from the Sources page.</p></div>`;
+    content = selected ? `<div class="card"><div class="cardHead"><div><p class="eyebrow">Selected Script</p><h2>${escapeHtml(selected.name)}</h2><p class="muted">${selected.obfuscated ? 'Obfuscated build · edits auto re-obfuscate on save' : 'Plain build'} · ${escapeHtml(selected.created_at)}</p></div></div><h3>Loadstring</h3><code class="block">${makeLoaderSnippet(selected.id)}</code><h3>Edit Script</h3><form method="post" action="/dashboard/scripts/${selected.id}/update"><label>Script name</label><input name="name" maxlength="80" value="${escapeHtml(selected.name)}" required><label>Source / Output</label><textarea name="code" maxlength="4000" required>${escapeHtml(selected.code)}</textarea><div class="buttonRow"><button type="submit">Save Script</button><button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate Download</button><button class="danger" type="submit" formaction="/dashboard/scripts/${selected.id}/delete" formmethod="post">Delete Script</button></div></form></div>` : `<div class="card"><h2>Scripts</h2><p class="muted">Create a script from the Sources page.</p></div>`;
   } else if (tab === 'sources') {
     content = `<div class="card"><p class="eyebrow">Sources</p><h2>Create a hosted script</h2><p class="muted">Upload a Lua or text file, or paste source manually. Obfuscation can run before hosting.</p><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><p class="hint">File contents will be placed into the source box below.</p><label>Source code</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("Karma Sources")' required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before hosting</label><label>Obfuscation level</label><select name="level"><option value="light">Light</option><option value="standard" selected>Standard</option><option value="max">Maximum</option><option value="luraph">Luraph API</option></select><div class="buttonRow"><button type="submit">Host Script</button><button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate Only</button></div></form></div>`;
   } else if (tab === 'keys') {
@@ -1131,7 +1250,7 @@ function discordDashboardPage(user, req = { query: {} }) {
       content = `<div class="card"><h2>Script Storage</h2><p class="muted">Only the owner can access global storage.</p></div>`;
     } else {
       const stored = db.prepare('SELECT * FROM hosted_scripts WHERE created_by = ? ORDER BY created_at DESC LIMIT 500').all(OWNER_ID);
-      content = `<div class="card"><p class="eyebrow">Owner Storage</p><h2>Script Storage</h2><p class="muted">Owner account has unlimited scripts. Add global scripts here and use them in panels/loadstrings.</p><form method="post" action="/owner/storage"><label>Name</label><input name="name" maxlength="80" required><label>Source</label><textarea name="code" maxlength="4000" required></textarea><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option><option value="luraph">Luraph API</option></select><label class="check"><input type="checkbox" name="obfuscate" value="true" checked> Obfuscate before storing</label><button>Add Stored Script</button></form><h3>Stored Scripts</h3>${stored.map(r=>`<div class="row"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.id)} · ${r.obfuscated ? 'Obfuscated' : 'Plain'}</small><code class="block">loadstring(game:HttpGet("${publicBaseUrl()}/script/${r.id}.lua"))()</code></div>`).join('') || '<p class="muted">No stored scripts.</p>'}</div>`;
+      content = `<div class="card"><p class="eyebrow">Owner Storage</p><h2>Script Storage</h2><p class="muted">Owner account has unlimited scripts. Add global scripts here and use them in panels/loadstrings.</p><form method="post" action="/owner/storage"><label>Name</label><input name="name" maxlength="80" required><label>Source</label><textarea name="code" maxlength="4000" required></textarea><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option><option value="luraph">Luraph API</option></select><label class="check"><input type="checkbox" name="obfuscate" value="true" checked> Obfuscate before storing</label><button>Add Stored Script</button></form><h3>Stored Scripts</h3>${stored.map(r=>`<div class="row"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.id)} · ${r.obfuscated ? 'Obfuscated' : 'Plain'}</small><code class="block">${makeLoaderSnippet(r.id)}</code></div>`).join('') || '<p class="muted">No stored scripts.</p>'}</div>`;
     }
   } else if (tab === 'obfuscate') {
     content = `<div class="card"><p class="eyebrow">Obfuscator</p><h2>Protect Lua source</h2><p class="muted">Kers0ne-style protected wrapper with randomized locals, rolling XOR, checksum validation, and anti-tamper fallback.</p><form method="post" action="/dashboard/obfuscate"><label>Filename</label><input name="filename" value="obfuscated.lua"><label>Lua source</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("protect me")' required></textarea><label>Obfuscation level</label><select name="level"><option value="light">Light</option><option value="standard" selected>Standard</option><option value="max">Maximum</option><option value="luraph">Luraph API</option></select><div class="buttonRow"><button type="submit">Download Obfuscated Lua</button><a class="btn dark" href="/dashboard?tab=sources">Upload Source</a></div></form><div class="featureGrid"><div>Anti-tamper checksum</div><div>Anti-Dump Hardening on new builds</div><div>Rolling XOR byte encoding</div><div>Decoy layer for automated dumps</div><div>Random local names</div><div>Protected output banner</div></div></div>`;
@@ -1461,9 +1580,9 @@ function startApiServer() {
   app.get('/loadstring/:id', (req, res) => {
     const script = db.prepare('SELECT * FROM hosted_scripts WHERE id = ?').get(req.params.id);
     if (!script) return res.status(404).type('text/plain').send('-- Karma Sources: script not found');
-    const base = publicBaseUrl();
-    const rawUrl = `${base}/script/${script.id}.lua`;
-    return res.type('text/plain').send(`loadstring(game:HttpGet("${rawUrl}"))()`);
+    const rawUrl = `${publicBaseUrl()}/script/${script.id}.lua`;
+    res.setHeader('Cache-Control', 'no-store');
+    return res.type('text/plain').send(makeProtectedLoader(rawUrl));
   });
 
   app.get('/hosted', (req, res) => {
