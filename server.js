@@ -61,15 +61,21 @@ const commands = [
     .setDescription('Show Karma service/database status'),
 
   new SlashCommandBuilder()
-    .setName('panel')
-    .setDescription('Post/configure the Karma button panel')
+    .setName('setup')
+    .setDescription('Set up Karma Protection panel or API link')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addStringOption(o => o.setName('title').setDescription('Panel title, example: Drizzy Hub').setRequired(true).setMaxLength(100))
-    .addStringOption(o => o.setName('description').setDescription('Panel description').setRequired(true).setMaxLength(500))
-    .addRoleOption(o => o.setName('admin_role').setDescription('Role allowed to manage Karma').setRequired(false))
-    .addRoleOption(o => o.setName('customer_role').setDescription('Buyer role given after redeeming').setRequired(false))
-    .addChannelOption(o => o.setName('log_channel').setDescription('Logs channel').addChannelTypes(ChannelType.GuildText).setRequired(false))
-    .addStringOption(o => o.setName('script_id').setDescription('Optional hosted script ID this panel should show').setRequired(false)),
+    .addSubcommand(sc => sc
+      .setName('panel')
+      .setDescription('Post a script panel')
+      .addStringOption(o => o.setName('title').setDescription('Panel title').setRequired(true).setMaxLength(100))
+      .addStringOption(o => o.setName('description').setDescription('Panel description').setRequired(true).setMaxLength(500))
+      .addStringOption(o => o.setName('script_id').setDescription('Hosted script ID from the website, example host_xxxxx').setRequired(false)))
+    .addSubcommand(sc => sc
+      .setName('api')
+      .setDescription('Link website API to this Discord server')
+      .addStringOption(o => o.setName('key').setDescription('API key from the website dashboard').setRequired(true))
+      .addStringOption(o => o.setName('script_id').setDescription('Optional hosted script ID for this server panel').setRequired(false))),
+
 
   new SlashCommandBuilder()
     .setName('apply')
@@ -718,7 +724,7 @@ async function handleCommand(interaction) {
       ephemeral: true,
       content: [
         '**Karma Commands**',
-        '`/panel title description script_id` - configure/post a script-specific panel',
+        '`/setup panel title description script_id` - post a script-specific panel',
         '`/apply` - create a script, host it, and get a loadstring',
         '`/createscript` - create a script/API secret only',
         '`/scripts` - list scripts',
@@ -746,20 +752,28 @@ async function handleCommand(interaction) {
     return interaction.reply({ ephemeral: true, content: `Karma Sources is online.\nScripts: **${scriptCount}**\nKeys: **${keyCount}**\nHosted scripts: **${hostedCount}**\nWebsite: ${publicBaseUrl()}` });
   }
 
-  if (commandName === 'setup' || commandName === 'genkey') {
-    return interaction.reply({ ephemeral: true, content: commandName === 'setup' ? 'This command was removed. Use `/panel title description` now.' : 'This command was removed. Use `/generatekey` now.' });
+  if (commandName === 'genkey') {
+    return interaction.reply({ ephemeral: true, content: 'This command was removed. Use `/generatekey` now.' });
   }
 
-  if (commandName === 'panel') {
+  if (commandName === 'setup') {
     if (!requireAdmin(interaction)) {
       return interaction.reply({ ephemeral: true, content: 'You need Administrator or the configured admin role to use this command.' });
     }
 
+    const setupMode = interaction.options.getSubcommand(false);
+    if (setupMode === 'api') {
+      const key = interaction.options.getString('key', true).trim();
+      const panelScriptId = interaction.options.getString('script_id', false);
+      const preview = `${key.slice(0, 6)}...${key.slice(-4)}`;
+      const patch = { api_key_hash: hashSecret(key), api_key_preview: preview };
+      if (panelScriptId) patch.panel_script_id = panelScriptId;
+      upsertSettings(interaction.guildId, patch);
+      return interaction.reply({ ephemeral: true, content: `API linked successfully. Key: \`${preview}\`${panelScriptId ? `\nPanel script set to: \`${panelScriptId}\`` : ''}` });
+    }
+
     const panelTitle = interaction.options.getString('title', true);
     const panelDescription = interaction.options.getString('description', true);
-    const adminRole = interaction.options.getRole('admin_role', false);
-    const customerRole = interaction.options.getRole('customer_role', false);
-    const logChannel = interaction.options.getChannel('log_channel', false);
     const panelScriptId = interaction.options.getString('script_id', false);
 
     const patch = {
@@ -768,9 +782,6 @@ async function handleCommand(interaction) {
       panel_description: panelDescription,
       panel_script_id: panelScriptId || null
     };
-    if (adminRole) patch.admin_role_id = adminRole.id;
-    if (customerRole) patch.customer_role_id = customerRole.id;
-    if (logChannel) patch.log_channel_id = logChannel.id;
     upsertSettings(interaction.guildId, patch);
 
     // Only ONE Discord response: the panel itself. No channel.send + confirmation.
@@ -783,7 +794,7 @@ async function handleCommand(interaction) {
     return;
   }
 
-  const adminCommands = ['generatekey', 'apply', 'hostscript', 'resethwid', 'banhwid', 'createscript', 'scripts', 'revoke', 'extendkey', 'deletekey', 'panel', 'loader', 'obfuscate', 'link'];
+  const adminCommands = ['generatekey', 'apply', 'hostscript', 'resethwid', 'banhwid', 'createscript', 'scripts', 'revoke', 'extendkey', 'deletekey', 'setup', 'loader', 'obfuscate', 'link'];
   if (adminCommands.includes(commandName) && !requireAdmin(interaction)) {
     await interaction.reply({ ephemeral: true, content: 'You need Administrator or the configured admin role to use this command.' });
     return;
@@ -1075,7 +1086,7 @@ async function sendHostedScripts(interaction) {
   }
   const content = rows.length
     ? rows.map(r => `**${r.name}** ${r.obfuscated ? '(obfuscated)' : ''}\nLoadstring:\n\`\`\`lua\n${makeLoaderSnippet(r.id)}\n\`\`\``).join('\n')
-    : 'No script is linked to this panel yet. Repost with `/panel ... script_id:<host_id>` or add scripts in the dashboard.';
+    : 'No script is linked to this panel yet. Repost with `/setup panel ... script_id:<host_id>` or add scripts in the dashboard.';
 
   if (interaction.deferred || interaction.replied) await interaction.followUp({ ephemeral: true, content });
   else await interaction.reply({ ephemeral: true, content });
@@ -1089,7 +1100,7 @@ async function sendKeyInfo(interaction, key) {
 
 async function giveBuyerRole(interaction) {
   const settings = getSettings(interaction.guildId);
-  if (!settings || !settings.customer_role_id) return interaction.reply({ ephemeral: true, content: 'Buyer role is not configured. Run `/panel title description` first and include customer_role.' });
+  if (!settings || !settings.customer_role_id) return interaction.reply({ ephemeral: true, content: 'Buyer role is not configured. Run `/setup panel title description` first and include customer_role.' });
 
   const owned = db.prepare('SELECT * FROM licenses WHERE guild_id = ? AND discord_user_id = ? AND revoked = 0 LIMIT 1').get(interaction.guildId, interaction.user.id);
   if (!owned) return interaction.reply({ ephemeral: true, content: 'You need to redeem a key first.' });
@@ -1248,7 +1259,7 @@ function discordDashboardPage(user, req = { query: {} }) {
   } else if (tab === 'how') {
     content = `<div class="card"><p class="eyebrow">How It Works</p><h2>Complete workflow</h2><div class="stepsDash"><div><span>1</span><b>Upload source</b><p>Go to Sources and upload a Lua file or paste code.</p></div><div><span>2</span><b>Obfuscate or host</b><p>Enable obfuscation and create a hosted loadstring.</p></div><div><span>3</span><b>Link Discord</b><p>Run <code>/link api key:${apiKey}</code> in your server.</p></div><div><span>4</span><b>Generate keys</b><p>Use <code>/generatekey</code> and the panel for buyers.</p></div></div></div>`;
   } else if (tab === 'tutorials') {
-    content = `<div class="card"><p class="eyebrow">Tutorials</p><h2>Quick tutorials</h2><h3>Bot setup</h3><p class="muted">Invite the bot, then run <code>/panel title:Your Hub description:Use buttons below</code>.</p><h3>Script upload</h3><p class="muted">Open Sources, upload your Lua file, optionally obfuscate, and copy the loadstring from Scripts.</p><h3>Premium/redeem</h3><p class="muted">Give customers a code from the Owner panel. They redeem it on the Redeem page.</p></div>`;
+    content = `<div class="card"><p class="eyebrow">Tutorials</p><h2>Quick tutorials</h2><h3>Bot setup</h3><p class="muted">Invite the bot, then run <code>/setup panel title:Your Hub description:Use buttons below</code>.</p><h3>Script upload</h3><p class="muted">Open Sources, upload your Lua file, optionally obfuscate, and copy the loadstring from Scripts.</p><h3>Premium/redeem</h3><p class="muted">Give customers a code from the Owner panel. They redeem it on the Redeem page.</p></div>`;
   } else if (tab === 'redeem') {
     content = `<div class="card"><p class="eyebrow">Redeem</p><h2>Redeem access code</h2><p class="muted">Paste a premium or access code you received.</p><form method="post" action="/redeem"><input name="code" placeholder="XXXX-XXXX-XXXX" required><button type="submit">Redeem</button></form></div>`;
   } else if (tab === 'discord') {
@@ -1261,7 +1272,7 @@ function discordDashboardPage(user, req = { query: {} }) {
     const users = db.prepare('SELECT * FROM website_users ORDER BY last_login DESC LIMIT 50').all();
     const codes = db.prepare('SELECT * FROM premium_codes ORDER BY created_at DESC LIMIT 50').all();
     const banned = db.prepare('SELECT * FROM banned_hwids ORDER BY created_at DESC LIMIT 50').all();
-    content = `<div class="card"><p class="eyebrow">Owner Only</p><h2>Owner panel</h2><div class="stats"><div class="stat"><div class="num">${users.length}</div><span>Recent users</span></div><div class="stat"><div class="num">${scripts.length}</div><span>Your scripts</span></div><div class="stat"><div class="num">${banned.length}</div><span>Banned HWIDs</span></div></div><h3>Create premium code</h3><form method="post" action="/owner/codes"><input name="code" placeholder="PREMIUM-KEY-123" required><input name="plan" placeholder="premium" value="premium"><button>Create Code</button></form><h3>Ban HWID</h3><form method="post" action="/owner/ban-hwid"><input name="hwid" placeholder="HWID" required><input name="reason" placeholder="Reason"><button class="danger">Ban HWID</button></form><h3>Website users</h3>${users.map(u=>`<div class="row"><b>${escapeHtml(u.display_username||u.global_name||u.username||u.id)}</b><small>${escapeHtml(u.id)} · plan: ${escapeHtml(u.plan||'free')} · quota: ${escapeHtml(u.script_quota||20)} · last: ${escapeHtml(u.last_login)}</small><form method="post" action="/owner/user-plan" class="inlineForm"><input type="hidden" name="user_id" value="${escapeHtml(u.id)}"><select name="plan"><option value="free" ${(u.plan||'free')==='free'?'selected':''}>free</option><option value="premium" ${u.plan==='premium'?'selected':''}>premium</option><option value="royal" ${u.plan==='royal'?'selected':''}>royal</option><option value="banned" ${u.plan==='banned'?'selected':''}>banned</option></select><input name="script_quota" type="number" min="0" max="10000" value="${escapeHtml(u.script_quota||20)}" style="width:120px"><button>Update</button></form></div>`).join('')}<h3>Premium codes</h3>${codes.map(c=>`<div class="row"><b>${escapeHtml(c.code)}</b><small>${escapeHtml(c.plan)} · redeemed by ${escapeHtml(c.redeemed_by||'nobody')}</small></div>`).join('')}</div>`;
+    content = `<div class="card"><p class="eyebrow">Owner Only</p><h2>Owner panel</h2><div class="stats"><div class="stat"><div class="num">${users.length}</div><span>Recent users</span></div><div class="stat"><div class="num">${scripts.length}</div><span>Your scripts</span></div><div class="stat"><div class="num">${banned.length}</div><span>Banned HWIDs</span></div></div><h3>Create premium code</h3><form method="post" action="/owner/codes"><input name="code" placeholder="PREMIUM-KEY-123" required><input name="plan" placeholder="premium" value="premium"><button>Create Code</button></form><h3>Ban HWID</h3><form method="post" action="/owner/ban-hwid"><input name="hwid" placeholder="HWID" required><input name="reason" placeholder="Reason"><button class="danger">Ban HWID</button></form><h3>Add script to user</h3><form method="post" action="/owner/add-user-script"><input name="user_id" placeholder="Discord user ID" required><input name="name" placeholder="Script name" required><textarea name="code" maxlength="4000" placeholder="Lua source" required></textarea><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><label class="check"><input type="checkbox" name="obfuscate" value="true" checked> Obfuscate before assigning</label><button>Add Script To User</button></form><h3>Website users</h3>${users.map(u=>`<div class="row"><b>${escapeHtml(u.display_username||u.global_name||u.username||u.id)}</b><small>${escapeHtml(u.id)} · plan: ${escapeHtml(u.plan||'free')} · quota: ${escapeHtml(u.script_quota||20)} · last: ${escapeHtml(u.last_login)}</small><form method="post" action="/owner/user-plan" class="inlineForm"><input type="hidden" name="user_id" value="${escapeHtml(u.id)}"><select name="plan"><option value="free" ${(u.plan||'free')==='free'?'selected':''}>free</option><option value="premium" ${u.plan==='premium'?'selected':''}>premium</option><option value="royal" ${u.plan==='royal'?'selected':''}>royal</option><option value="banned" ${u.plan==='banned'?'selected':''}>banned</option></select><input name="script_quota" type="number" min="0" max="10000" value="${escapeHtml(u.script_quota||20)}" style="width:120px"><button>Update</button></form></div>`).join('')}<h3>Premium codes</h3>${codes.map(c=>`<div class="row"><b>${escapeHtml(c.code)}</b><small>${escapeHtml(c.plan)} · redeemed by ${escapeHtml(c.redeemed_by||'nobody')}</small></div>`).join('')}</div>`;
   } else {
     content = `<div class="card heroCard"><p class="eyebrow">Overview</p><h2>Dashboard</h2><p class="muted">Manage scripts, sources, obfuscation, tutorials, Discord links, redeem codes, and owner tools from one clean dashboard.</p><div class="stats"><div class="stat"><div class="num">${scripts.length}</div><span>Scripts used</span></div><div class="stat"><div class="num">${remaining}</div><span>Slots left</span></div><div class="stat"><div class="num">${scriptQuota}</div><span>Max scripts</span></div></div><div class="anime"></div></div>`;
   }
@@ -1290,15 +1301,19 @@ function readCookies(req) {
 }
 
 function getSessionUser(req) {
-  const token = readCookies(req).kolsec_session;
-  if (!token || !token.includes('.')) return null;
-  const [body, sig] = token.split('.');
-  const expected = crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(body).digest('base64url');
-  if (Buffer.byteLength(sig) !== Buffer.byteLength(expected)) return null;
-  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
-  const user = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
-  if (!user.exp || user.exp < Date.now()) return null;
-  return user;
+  try {
+    const token = readCookies(req).kolsec_session;
+    if (!token || !token.includes('.')) return null;
+    const [body, sig] = token.split('.');
+    const expected = crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(body).digest('base64url');
+    if (!sig || Buffer.byteLength(sig) !== Buffer.byteLength(expected)) return null;
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+    const user = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (!user.exp || user.exp < Date.now()) return null;
+    return user;
+  } catch {
+    return null;
+  }
 }
 
 function requireDashboardUser(req, res) {
@@ -1496,8 +1511,7 @@ function startApiServer() {
   app.post('/dashboard/scripts/:id/delete', (req, res) => {
     const user = requireDashboardUser(req, res);
     if (!user) return;
-    db.prepare('DELETE FROM hosted_scripts WHERE id = ? AND created_by = ?').run(req.params.id, user.id);
-    return res.redirect('/dashboard');
+    return res.status(403).type('html').send('<h1>Delete disabled</h1><p>Scripts are permanent and cannot be deleted from the dashboard.</p><a href="/dashboard?tab=scripts">Back</a>');
   });
 
   app.post('/dashboard/obfuscate', async (req, res) => {
@@ -1542,6 +1556,22 @@ function startApiServer() {
     const code = String(req.body.code || '').trim();
     const plan = String(req.body.plan || 'premium').trim();
     if (code) db.prepare('INSERT OR IGNORE INTO premium_codes (code, plan, created_by) VALUES (?, ?, ?)').run(code, plan, user.id);
+    return res.redirect('/dashboard?tab=owner');
+  });
+
+  app.post('/owner/add-user-script', async (req, res) => {
+    const user = requireDashboardUser(req, res);
+    if (!user || user.id !== OWNER_ID) return;
+    const targetId = String(req.body.user_id || '').trim();
+    const name = String(req.body.name || '').trim().slice(0, 80);
+    const source = String(req.body.code || '').slice(0, 4000);
+    const level = String(req.body.level || 'standard');
+    const shouldObfuscate = req.body.obfuscate === 'true' || req.body.obfuscate === 'on';
+    if (!targetId || !name || !source) return res.status(400).type('html').send('<h1>Missing fields</h1><a href="/dashboard?tab=owner">Back</a>');
+    db.prepare('INSERT OR IGNORE INTO website_users (id, username, global_name, display_username, script_quota) VALUES (?, ?, ?, ?, ?)')
+      .run(targetId, targetId, targetId, targetId, 20);
+    const finalCode = shouldObfuscate ? await callObfuscator(source, level) : source;
+    createHostedScript({ guildId: 'owner-assigned', name, code: finalCode, sourceCode: source, obfuscated: shouldObfuscate, createdBy: targetId });
     return res.redirect('/dashboard?tab=owner');
   });
 
@@ -1629,6 +1659,12 @@ function startApiServer() {
       expires_at: license.expires_at,
       script_id
     });
+  });
+
+  app.use((err, req, res, next) => {
+    console.error('Website error:', err);
+    if (res.headersSent) return next(err);
+    return res.status(500).type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma Protection Error</title><style>body{margin:0;background:#000;color:#fff;font-family:system-ui;display:grid;place-items:center;min-height:100vh}.card{width:min(680px,92%);border:1px solid #333;border-radius:24px;background:#090909;padding:28px}a{color:#fff}</style></head><body><div class="card"><h1>Something went wrong</h1><p>The website hit an error instead of loading this page.</p><p>Try signing in again, or check Render logs for the exact error.</p><a href="/">Back home</a></div></body></html>`);
   });
 
   // Render requires process.env.PORT for web services.
