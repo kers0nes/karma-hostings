@@ -175,15 +175,17 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('obfuscate')
-    .setDescription('Obfuscate Lua code using your obfuscator API')
-    .addStringOption(o => o.setName('code').setDescription('Lua code to obfuscate, max 4000 chars').setRequired(true).setMaxLength(4000))
+    .setDescription('Obfuscate Lua code or an uploaded .lua/.txt file')
+    .addStringOption(o => o.setName('code').setDescription('Lua code to obfuscate, max 4000 chars').setRequired(false).setMaxLength(4000))
+    .addAttachmentOption(o => o.setName('file').setDescription('Upload a .lua or .txt file to obfuscate').setRequired(false))
     .addStringOption(o => o.setName('filename').setDescription('Output filename').setRequired(false).setMaxLength(80))
     .addStringOption(o => o.setName('level').setDescription('Obfuscation level').setRequired(false).addChoices(
       { name: 'Light', value: 'light' },
       { name: 'Standard', value: 'standard' },
       { name: 'Maximum', value: 'max' },
       { name: 'Luraph API', value: 'luraph' }
-    )),
+    ))
+    .addBooleanOption(o => o.setName('private').setDescription('Only you can see the result. Default: false/public')),
 
   new SlashCommandBuilder()
     .setName('link')
@@ -960,19 +962,45 @@ async function handleCommand(interaction) {
   }
 
   if (commandName === 'obfuscate') {
-    const code = interaction.options.getString('code', true);
-    const filename = (interaction.options.getString('filename') || 'obfuscated.lua').replace(/[^a-zA-Z0-9_.-]/g, '_');
+    let code = interaction.options.getString('code', false);
+    const upload = interaction.options.getAttachment('file', false);
+    const privateResult = interaction.options.getBoolean('private') || false;
+    const filenameInput = interaction.options.getString('filename') || upload?.name || 'obfuscated.lua';
+    const filename = filenameInput.replace(/[^a-zA-Z0-9_.-]/g, '_');
     const level = interaction.options.getString('level') || 'standard';
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ ephemeral: privateResult });
 
     try {
+      if (upload) {
+        if (upload.size > 256 * 1024) {
+          await interaction.editReply({ content: 'File too large. Upload a .lua/.txt file under 256 KB.' });
+          return;
+        }
+        if (!/\.(lua|txt)$/i.test(upload.name || '')) {
+          await interaction.editReply({ content: 'Please upload a .lua or .txt file.' });
+          return;
+        }
+        const response = await fetch(upload.url);
+        if (!response.ok) throw new Error(`Could not download uploaded file: ${response.status}`);
+        code = await response.text();
+      }
+
+      if (!code || !code.trim()) {
+        await interaction.editReply({ content: 'Add Lua code with `code:` or upload a `.lua` / `.txt` file with `file:`.' });
+        return;
+      }
+
+      code = code.slice(0, 4000);
       const obfuscated = await callObfuscator(code, level);
       const attachment = new AttachmentBuilder(Buffer.from(String(obfuscated), 'utf8'), { name: filename.endsWith('.lua') ? filename : `${filename}.lua` });
-      await interaction.editReply({ content: 'Obfuscated successfully.', files: [attachment] });
-      await logGuild(interaction.guild, `🧩 Code obfuscated by <@${interaction.user.id}>.`);
+      await interaction.editReply({
+        content: `Obfuscated successfully. Level: **${level}**. Uploaded by <@${interaction.user.id}>.`,
+        files: [attachment]
+      });
+      await logGuild(interaction.guild, `Code obfuscated by <@${interaction.user.id}>.`);
     } catch (error) {
-      await interaction.editReply({ content: `Obfuscator API failed: ${error.message}` });
+      await interaction.editReply({ content: `Obfuscator failed: ${error.message}` });
     }
     return;
   }
