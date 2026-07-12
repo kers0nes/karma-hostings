@@ -455,104 +455,133 @@ end)(...)
 }
 
 function kers0neLocalObfuscate(luaCode, opts = {}) {
-  // Reliable Karma/Kers0ne-style obfuscator.
-  // Goal: execute without false anti-tamper crashes, while still making static dumps useless.
-  // Anti-tamper now only stops on real payload corruption or missing execution primitives.
+  // Stronger Karma/Kers0ne-style obfuscator.
+  // Uses multi-key XOR + rolling state + Base66 text packing + checksum validation.
+  // Designed to execute reliably while making static dumping/deobfuscation harder.
   const source = String(luaCode || '');
   const strength = Math.max(1, Math.min(3, Number(opts.strength || 2)));
   const bytes = Buffer.from(source, 'utf8');
-  const seedA = (crypto.randomBytes(1)[0] || 173) & 255;
-  const seedB = (crypto.randomBytes(1)[0] || 91) & 255;
-  const seedC = (crypto.randomBytes(1)[0] || 47) & 255;
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%'; // 66 chars
+  const keyCount = strength === 3 ? 48 : strength === 2 ? 32 : 16;
+  const keys = Array.from(crypto.randomBytes(keyCount));
+  const seedA = crypto.randomBytes(1)[0] || 173;
+  const seedB = crypto.randomBytes(1)[0] || 91;
+  const seedC = crypto.randomBytes(1)[0] || 47;
   const home = publicBaseUrl();
 
   let prev = seedB;
-  const encoded = Array.from(bytes, (byte, index) => {
+  const encrypted = Array.from(bytes, (byte, index) => {
     const i = index + 1;
-    const rolling = (seedA + i * 17 + (i % 11) * seedB + prev + seedC) & 255;
-    const enc = byte ^ rolling;
-    prev = (enc + seedB + i) & 255;
+    const k1 = keys[(i - 1) % keys.length];
+    const k2 = keys[(i * 7 + seedA) % keys.length];
+    const rolling = (seedA + i * 17 + (i % 11) * seedB + prev + seedC + k2) & 255;
+    let enc = byte ^ k1 ^ rolling;
+    enc = (enc + ((i * 13 + seedC) & 255)) & 255;
+    prev = (enc + k1 + seedB + i) & 255;
     return enc;
   });
 
+  let packed = '';
+  for (const b of encrypted) {
+    packed += alphabet[Math.floor(b / 66)] + alphabet[b % 66];
+  }
+  let keyPacked = '';
+  for (const b of keys) {
+    keyPacked += alphabet[Math.floor(b / 66)] + alphabet[b % 66];
+  }
+
   const checksum = bytes.reduce((a, b, i) => (a + ((b + 1) * ((i % 251) + 1))) % 2147483647, 7);
-  const decoyText = `print(${JSON.stringify('Karma Protection: decoy payload')})`;
-  const decoyBytes = Array.from(Buffer.from(decoyText, 'utf8'), (b, i) => b ^ ((seedC + i * 13) & 255));
+  const decoy = `print(${JSON.stringify('Karma Protection: decoy payload')})`;
+  let decoyPacked = '';
+  for (const b of Buffer.from(decoy, 'utf8')) {
+    const e = b ^ seedC;
+    decoyPacked += alphabet[Math.floor(e / 66)] + alphabet[e % 66];
+  }
 
-  const chunkSize = strength === 3 ? 16 : strength === 2 ? 24 : 36;
-  const chunks = [];
-  for (let i = 0; i < encoded.length; i += chunkSize) chunks.push(encoded.slice(i, i + chunkSize).join(','));
-  const decoyChunks = [];
-  for (let i = 0; i < decoyBytes.length; i += 24) decoyChunks.push(decoyBytes.slice(i, i + 24).join(','));
-
-  const names = Array.from({ length: 20 }, () => `_${crypto.randomBytes(3).toString('hex')}`);
-  const [nChar, nConcat, nByte, nLoad, nPcall, nType, nData, nDecoy, nOut, nSeedA, nSeedB, nSeedC, nPrev, nChk, nHome, nTamper, nWipe, nLen, nBxor, nBand] = names;
-  const junkNumbers = Array.from({ length: 8 }, () => crypto.randomInt(10, 999)).join(',');
+  const names = Array.from({ length: 26 }, () => `_${crypto.randomBytes(3).toString('hex')}`);
+  const [nAlphabet,nPayload,nKeys,nDecoy,nChar,nByte,nSub,nFind,nConcat,nLoad,nPcall,nType,nBxor,nBand,nFloor,nOut,nPrev,nSeedA,nSeedB,nSeedC,nChk,nHome,nTamper,nDecode,nWipe,nLen] = names;
 
   return `--[[
 \tProtected By Kers0ne Obfuscator
-\tKarma Protection Anti-Tamper: stable
+\tKarma Protection Anti-Tamper: Base66 Multi-XOR
 ]]
 
 return(function(...)
+  local ${nAlphabet}=${JSON.stringify(alphabet)}
+  local ${nPayload}=[=[${packed}]=]
+  local ${nKeys}=[=[${keyPacked}]=]
+  local ${nDecoy}=[=[${decoyPacked}]=]
   local ${nChar}=string.char
-  local ${nConcat}=table.concat
   local ${nByte}=string.byte
+  local ${nSub}=string.sub
+  local ${nFind}=string.find
+  local ${nConcat}=table.concat
   local ${nLoad}=loadstring or load
   local ${nPcall}=pcall
   local ${nType}=type
-  local ${nHome}=${JSON.stringify(home)}
+  local ${nFloor}=math.floor
+  local ${nBxor}=(bit32 and bit32.bxor) or (bit and bit.bxor)
+  local ${nBand}=(bit32 and bit32.band) or (bit and bit.band)
   local ${nSeedA}=${seedA}
   local ${nSeedB}=${seedB}
   local ${nSeedC}=${seedC}
   local ${nLen}=${bytes.length}
-  local ${nData}={${chunks.join(',')}}
-  local ${nDecoy}={${decoyChunks.join(',')}}
-  local _junk={${junkNumbers}}
+  local ${nHome}=${JSON.stringify(home)}
 
-  local ${nBxor} = (bit32 and bit32.bxor) or (bit and bit.bxor)
-  local ${nBand} = (bit32 and bit32.band) or (bit and bit.band)
+  local function ${nDecode}(_s)
+    local _r={}
+    for _i=1,#_s,2 do
+      local _a=${nFind}(${nAlphabet},${nSub}(_s,_i,_i),1,true)
+      local _b=${nFind}(${nAlphabet},${nSub}(_s,_i+1,_i+1),1,true)
+      if not _a or not _b then return nil end
+      _r[#_r+1]=(_a-1)*66+(_b-1)
+    end
+    return _r
+  end
 
   local function ${nTamper}(...)
     if setclipboard then ${nPcall}(setclipboard,${nHome}) end
     if warn then ${nPcall}(warn,"Karma Protection triggered: "..${nHome}) end
-    local _d={}
-    if ${nBxor} and ${nBand} then
-      for _i=1,#${nDecoy} do _d[_i]=${nChar}(${nBxor}(${nDecoy}[_i],${nBand}(${nSeedC}+(_i-1)*13,255))) end
-      local _fake=${nConcat}(_d)
-      if ${nType}(${nLoad})=="function" then local _ok,_fn=${nPcall}(${nLoad},_fake,"KarmaDecoy") if _ok and ${nType}(_fn)=="function" then return _fn(...) end end
-    end
+    local _d=${nDecode}(${nDecoy}) or {}
+    local _o={}
+    for _i=1,#_d do _o[_i]=${nChar}(${nBxor}(_d[_i],${nSeedC})) end
+    local _fake=${nConcat}(_o)
+    if ${nType}(${nLoad})=="function" then local _ok,_fn=${nPcall}(${nLoad},_fake,"KarmaDecoy") if _ok and ${nType}(_fn)=="function" then return _fn(...) end end
     return nil
   end
 
   local function ${nWipe}(_t) for _i=1,#_t do _t[_i]=0 end end
+  if ${nType}(${nLoad})~="function" or not ${nBxor} or not ${nBand} then return ${nTamper}(...) end
 
-  -- Do not false-flag normal executors. Only fail if core primitives are missing.
-  if ${nType}(${nLoad})~="function" or ${nType}(${nConcat})~="function" or ${nType}(${nByte})~="function" or not ${nBxor} or not ${nBand} then
-    return ${nTamper}(...)
-  end
+  local _data=${nDecode}(${nPayload})
+  local _keys=${nDecode}(${nKeys})
+  if not _data or not _keys or #_keys<1 then return ${nTamper}(...) end
 
   local ${nOut}={}
   local ${nPrev}=${nSeedB}
-  for _i=1,#${nData} do
-    local _e=${nData}[_i]
-    local _r=${nBand}(${nSeedA}+_i*17+(_i%11)*${nSeedB}+${nPrev}+${nSeedC},255)
-    ${nOut}[_i]=${nChar}(${nBxor}(_e,_r))
-    ${nPrev}=${nBand}(_e+${nSeedB}+_i,255)
+  for _i=1,#_data do
+    local _e=_data[_i]
+    local _k1=_keys[((_i-1)%#_keys)+1]
+    local _k2=_keys[((_i*7+${nSeedA})%#_keys)+1]
+    local _unadd=${nBand}(_e-(${nBand}(_i*13+${nSeedC},255)),255)
+    local _roll=${nBand}(${nSeedA}+_i*17+(_i%11)*${nSeedB}+${nPrev}+${nSeedC}+_k2,255)
+    local _plain=${nBxor}(${nBxor}(_unadd,_k1),_roll)
+    ${nOut}[_i]=${nChar}(_plain)
+    ${nPrev}=${nBand}(_e+_k1+${nSeedB}+_i,255)
   end
 
   local _src=${nConcat}(${nOut})
-  if #_src~=${nLen} then ${nWipe}(${nData}); ${nWipe}(${nOut}); return ${nTamper}(...) end
+  if #_src~=${nLen} then ${nWipe}(_data); ${nWipe}(_keys); ${nWipe}(${nOut}); return ${nTamper}(...) end
 
   local ${nChk}=7
   for _i=1,#_src do
     local _b=${nByte}(_src,_i)
     ${nChk}=(${nChk}+((_b+1)*(((_i-1)%251)+1)))%2147483647
   end
-  if ${nChk}~=${checksum} then ${nWipe}(${nData}); ${nWipe}(${nOut}); return ${nTamper}(...) end
+  if ${nChk}~=${checksum} then ${nWipe}(_data); ${nWipe}(_keys); ${nWipe}(${nOut}); return ${nTamper}(...) end
 
   local _ok,_fn=${nPcall}(${nLoad},_src,"KarmaProtected")
-  ${nWipe}(${nData}); ${nWipe}(${nOut}); ${nWipe}(_junk)
+  ${nWipe}(_data); ${nWipe}(_keys); ${nWipe}(${nOut})
   if not _ok or ${nType}(_fn)~="function" then return ${nTamper}(...) end
   return _fn(...)
 end)(...)
@@ -1222,7 +1251,7 @@ function discordDashboardPage(user, req = { query: {} }) {
       content = `<div class="card"><p class="eyebrow">Owner Storage</p><h2>Script Storage</h2><p class="muted">Owner account has unlimited scripts. Add global scripts here and use them in panels/loadstrings.</p><form method="post" action="/owner/storage"><label>Name</label><input name="name" maxlength="80" required><label>Source</label><textarea name="code" maxlength="4000" required></textarea><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><label class="check"><input type="checkbox" name="obfuscate" value="true" checked> Obfuscate before storing</label><button>Add Stored Script</button></form><h3>Stored Scripts</h3>${stored.map(r=>`<div class="row"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.id)} · ${r.obfuscated ? 'Obfuscated' : 'Plain'}</small><code class="block">${makeLoaderSnippet(r.id)}</code></div>`).join('') || '<p class="muted">No stored scripts.</p>'}</div>`;
     }
   } else if (tab === 'obfuscate') {
-    content = `<div class="card"><p class="eyebrow">Obfuscator</p><h2>Protect Lua source</h2><p class="muted">Kers0ne-style protected wrapper with randomized locals, rolling XOR, checksum validation, and anti-tamper fallback.</p><form method="post" action="/dashboard/obfuscate"><label>Filename</label><input name="filename" value="obfuscated.lua"><label>Lua source</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("protect me")' required></textarea><label>Obfuscation level</label><select name="level"><option value="light">Light</option><option value="standard" selected>Standard</option><option value="max">Maximum</option></select><div class="buttonRow"><button type="submit">Obfuscate</button><a class="btn dark" href="/dashboard?tab=sources">Upload Source</a></div></form><div class="featureGrid"><div>Anti-tamper checksum</div><div>Anti-Dump Hardening on new builds</div><div>Rolling XOR byte encoding</div><div>Decoy layer for automated dumps</div><div>Random local names</div><div>Protected output banner</div></div></div>`;
+    content = `<div class="card"><p class="eyebrow">Obfuscator</p><h2>Protect Lua source</h2><p class="muted">Kers0ne-style protected wrapper with randomized locals, rolling XOR, checksum validation, and anti-tamper fallback.</p><form method="post" action="/dashboard/obfuscate"><label>Filename</label><input name="filename" value="obfuscated.lua"><label>Lua source</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("protect me")' required></textarea><label>Obfuscation level</label><select name="level"><option value="light">Light</option><option value="standard" selected>Standard</option><option value="max">Maximum</option></select><div class="buttonRow"><button type="submit">Obfuscate</button><a class="btn dark" href="/dashboard?tab=scripts">Scripts</a></div></form><div class="featureGrid"><div>Anti-tamper checksum</div><div>Anti-Dump Hardening on new builds</div><div>Rolling XOR byte encoding</div><div>Decoy layer for automated dumps</div><div>Random local names</div><div>Protected output banner</div></div></div>`;
   } else if (tab === 'how') {
     content = `<div class="card"><p class="eyebrow">How It Works</p><h2>Complete workflow</h2><div class="stepsDash"><div><span>1</span><b>Upload source</b><p>Go to Sources and upload a Lua file or paste code.</p></div><div><span>2</span><b>Obfuscate or host</b><p>Enable obfuscation and create a hosted loadstring.</p></div><div><span>3</span><b>Link Discord</b><p>Run <code>/link api key:${apiKey}</code> in your server.</p></div><div><span>4</span><b>Generate keys</b><p>Use <code>/generatekey</code> and the panel for buyers.</p></div></div></div>`;
   } else if (tab === 'tutorials') {
@@ -1489,8 +1518,7 @@ function startApiServer() {
     const level = String(req.body.level || 'standard');
     if (!code) return res.status(400).type('html').send('<h1>Missing code</h1><a href="/dashboard?tab=obfuscate">Back</a>');
     const obfuscated = await callObfuscator(code, level);
-    res.setHeader('Content-Disposition', `attachment; filename="${filename.endsWith('.lua') ? filename : `${filename}.lua`}"`);
-    return res.type('text/plain').send(obfuscated);
+    return res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Obfuscated - Karma Protection</title><style>body{margin:0;background:#000;color:#fff;font-family:SF Pro Display,Aptos,Segoe UI,system-ui,sans-serif}.wrap{width:min(1100px,94%);margin:32px auto}.card{border:1px solid #2a2a2d;border-radius:28px;background:linear-gradient(180deg,#181818,#080808);padding:24px}textarea{width:100%;min-height:62vh;background:#050505;color:#fff;border:1px solid #333;border-radius:16px;padding:14px;font:12px ui-monospace,monospace}button,a{display:inline-flex;margin:10px 8px 18px 0;padding:12px 16px;border-radius:999px;border:1px solid #fff;background:#fff;color:#000;text-decoration:none;font-weight:900;cursor:pointer}.dark{background:#000;color:#fff;border-color:#333}</style></head><body><div class="wrap"><div class="card"><h1>Obfuscated Successfully</h1><p>Level: <b>${escapeHtml(level)}</b>. Copy it below — no download needed.</p><button onclick="navigator.clipboard.writeText(document.getElementById('out').value)">Copy Obfuscated Code</button><a class="dark" href="/dashboard?tab=obfuscate">Back to Obfuscator</a><a class="dark" href="/dashboard?tab=scripts">Scripts</a><textarea id="out" spellcheck="false">${escapeHtml(obfuscated)}</textarea></div></div></body></html>`);
   });
 
   app.post('/redeem', (req, res) => {
