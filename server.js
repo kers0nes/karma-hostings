@@ -37,9 +37,7 @@ const {
   DISCORD_CLIENT_SECRET,
   SESSION_SECRET,
   DISCORD_INVITE_URL = 'https://discord.com',
-  OWNER_ID = '1207803375807373415',
-  LURAPH_API_URL,
-  LURAPH_API_KEY
+  OWNER_ID = '1207803375807373415'
 } = process.env;
 
 const OAUTH_CLIENT_ID = DISCORD_OAUTH_CLIENT_ID || CLIENT_ID || '1525736430813450342';
@@ -70,7 +68,8 @@ const commands = [
     .addStringOption(o => o.setName('description').setDescription('Panel description').setRequired(true).setMaxLength(500))
     .addRoleOption(o => o.setName('admin_role').setDescription('Role allowed to manage Karma').setRequired(false))
     .addRoleOption(o => o.setName('customer_role').setDescription('Buyer role given after redeeming').setRequired(false))
-    .addChannelOption(o => o.setName('log_channel').setDescription('Logs channel').addChannelTypes(ChannelType.GuildText).setRequired(false)),
+    .addChannelOption(o => o.setName('log_channel').setDescription('Logs channel').addChannelTypes(ChannelType.GuildText).setRequired(false))
+    .addStringOption(o => o.setName('script_id').setDescription('Optional hosted script ID this panel should show').setRequired(false)),
 
   new SlashCommandBuilder()
     .setName('apply')
@@ -81,8 +80,7 @@ const commands = [
     .addStringOption(o => o.setName('level').setDescription('Obfuscation level').setRequired(false).addChoices(
       { name: 'Light', value: 'light' },
       { name: 'Standard', value: 'standard' },
-      { name: 'Maximum', value: 'max' },
-      { name: 'Luraph API', value: 'luraph' }
+      { name: 'Maximum', value: 'max' }
     )),
 
   new SlashCommandBuilder()
@@ -107,21 +105,8 @@ const commands = [
     .addStringOption(o => o.setName('key').setDescription('License key').setRequired(true)),
 
   new SlashCommandBuilder()
-    .setName('keyinfo')
-    .setDescription('Show license key info')
-    .addStringOption(o => o.setName('key').setDescription('License key').setRequired(true)),
-
-  new SlashCommandBuilder()
     .setName('mykeys')
     .setDescription('Show your redeemed keys'),
-
-  new SlashCommandBuilder()
-    .setName('freekey')
-    .setDescription('Get a free key for the first configured script'),
-
-  new SlashCommandBuilder()
-    .setName('getrole')
-    .setDescription('Get buyer role if you have a redeemed key'),
 
   new SlashCommandBuilder()
     .setName('viewscript')
@@ -169,8 +154,7 @@ const commands = [
     .addStringOption(o => o.setName('level').setDescription('Obfuscation level').setRequired(false).addChoices(
       { name: 'Light', value: 'light' },
       { name: 'Standard', value: 'standard' },
-      { name: 'Maximum', value: 'max' },
-      { name: 'Luraph API', value: 'luraph' }
+      { name: 'Maximum', value: 'max' }
     )),
 
   new SlashCommandBuilder()
@@ -182,8 +166,7 @@ const commands = [
     .addStringOption(o => o.setName('level').setDescription('Obfuscation level').setRequired(false).addChoices(
       { name: 'Light', value: 'light' },
       { name: 'Standard', value: 'standard' },
-      { name: 'Maximum', value: 'max' },
-      { name: 'Luraph API', value: 'luraph' }
+      { name: 'Maximum', value: 'max' }
     ))
     .addBooleanOption(o => o.setName('private').setDescription('Only you can see the result. Default: false/public')),
 
@@ -239,6 +222,7 @@ CREATE TABLE IF NOT EXISTS guild_settings (
   panel_message_id TEXT,
   panel_title TEXT,
   panel_description TEXT,
+  panel_script_id TEXT,
   api_key_hash TEXT,
   api_key_preview TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -320,6 +304,7 @@ CREATE INDEX IF NOT EXISTS idx_premium_codes_redeemed_by ON premium_codes(redeem
 for (const migration of [
   'ALTER TABLE guild_settings ADD COLUMN panel_title TEXT',
   'ALTER TABLE guild_settings ADD COLUMN panel_description TEXT',
+  'ALTER TABLE guild_settings ADD COLUMN panel_script_id TEXT',
   'ALTER TABLE guild_settings ADD COLUMN api_key_hash TEXT',
   'ALTER TABLE guild_settings ADD COLUMN api_key_preview TEXT',
   'ALTER TABLE website_users ADD COLUMN display_username TEXT',
@@ -363,8 +348,8 @@ function upsertSettings(guildId, patch) {
   const next = { ...current, ...patch };
 
   db.prepare(`
-    INSERT INTO guild_settings (guild_id, admin_role_id, customer_role_id, log_channel_id, panel_channel_id, panel_message_id, panel_title, panel_description, api_key_hash, api_key_preview, updated_at)
-    VALUES (@guild_id, @admin_role_id, @customer_role_id, @log_channel_id, @panel_channel_id, @panel_message_id, @panel_title, @panel_description, @api_key_hash, @api_key_preview, CURRENT_TIMESTAMP)
+    INSERT INTO guild_settings (guild_id, admin_role_id, customer_role_id, log_channel_id, panel_channel_id, panel_message_id, panel_title, panel_description, panel_script_id, api_key_hash, api_key_preview, updated_at)
+    VALUES (@guild_id, @admin_role_id, @customer_role_id, @log_channel_id, @panel_channel_id, @panel_message_id, @panel_title, @panel_description, @panel_script_id, @api_key_hash, @api_key_preview, CURRENT_TIMESTAMP)
     ON CONFLICT(guild_id) DO UPDATE SET
       admin_role_id=excluded.admin_role_id,
       customer_role_id=excluded.customer_role_id,
@@ -373,6 +358,7 @@ function upsertSettings(guildId, patch) {
       panel_message_id=excluded.panel_message_id,
       panel_title=excluded.panel_title,
       panel_description=excluded.panel_description,
+      panel_script_id=excluded.panel_script_id,
       api_key_hash=excluded.api_key_hash,
       api_key_preview=excluded.api_key_preview,
       updated_at=CURRENT_TIMESTAMP
@@ -385,6 +371,7 @@ function upsertSettings(guildId, patch) {
     panel_message_id: next.panel_message_id || null,
     panel_title: next.panel_title || null,
     panel_description: next.panel_description || null,
+    panel_script_id: next.panel_script_id || null,
     api_key_hash: next.api_key_hash || null,
     api_key_preview: next.api_key_preview || null
   });
@@ -536,7 +523,7 @@ return(function(...)
   end
 
   local function ${nProbe}()
-    -- Luraph-inspired environment/integrity validation, tuned to avoid false errors in normal execution.
+    -- Strong environment/integrity validation, tuned to avoid false errors in normal execution.
     if ${nType}(${nLoad})~="function" or ${nType}(${nConcat})~="function" or ${nType}(${nByte})~="function" then return false end
     local _ok1,_r1=${nPcall}(${nByte},"K",1)
     if not _ok1 or _r1~=75 then return false end
@@ -597,32 +584,8 @@ end)(...)
 `;
 }
 
-async function callLuraphObfuscator(luaCode) {
-  if (!LURAPH_API_URL || !LURAPH_API_KEY) {
-    throw new Error('Luraph is not configured. Add LURAPH_API_URL and LURAPH_API_KEY in Render. If you have Luraph source code, send the real source file and I can wire it in.');
-  }
-  const response = await fetch(LURAPH_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${LURAPH_API_KEY}`,
-      'X-API-Key': LURAPH_API_KEY
-    },
-    body: JSON.stringify({ code: luaCode, source: luaCode, level: 'luraph' })
-  });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`Luraph API returned ${response.status}: ${text.slice(0, 300)}`);
-  try {
-    const json = JSON.parse(text);
-    return json.obfuscated || json.code || json.result || json.output || text;
-  } catch {
-    return text;
-  }
-}
-
 async function callObfuscator(luaCode, level = 'standard') {
   const selected = String(level || 'standard').toLowerCase();
-  if (selected === 'luraph') return callLuraphObfuscator(luaCode);
   if (selected === 'light') return kers0neLocalObfuscate(luaCode, { strength: 1 });
   if (selected === 'max' || selected === 'maximum') {
     // Stronger local mode: wrap once, then wrap the protected output again.
@@ -656,7 +619,7 @@ const client = new Client({
 // Prevent duplicate replies if Discord/hosting sends the same interaction twice.
 const processedInteractions = new Set();
 
-function panelEmbed(guildId) {
+function panelEmbed(guildId, sentBy = null) {
   const settings = guildId ? getSettings(guildId) : null;
   const title = settings?.panel_title || 'Karma Hub';
   const description = settings?.panel_description || 'Use the buttons below to manage your key';
@@ -666,7 +629,7 @@ function panelEmbed(guildId) {
     .setDescription(description)
     .setColor(0xe3b944)
     .setThumbnail(`${publicBaseUrl()}/assets/karma-logo.png`)
-    .setFooter({ text: 'Karma Sources | v.beta', iconURL: `${publicBaseUrl()}/assets/karma-logo.png` });
+    .setFooter({ text: sentBy ? `Sent By ${sentBy} • Karma Sources` : 'Karma Sources', iconURL: `${publicBaseUrl()}/assets/karma-logo.png` });
 }
 
 function panelButtons() {
@@ -674,13 +637,6 @@ function panelButtons() {
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('panel_view_script').setLabel('View Script').setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId('panel_redeem').setLabel('Redeem Key').setStyle(ButtonStyle.Success)
-    ),
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('panel_key_info').setLabel('Key Info').setStyle(ButtonStyle.Secondary)
-    ),
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('panel_get_buyer_role').setLabel('Get Buyer Role').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('panel_free_key').setLabel('Free Key').setStyle(ButtonStyle.Secondary)
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('panel_reset_hwid').setLabel('Reset HWID').setStyle(ButtonStyle.Danger)
@@ -760,16 +716,13 @@ async function handleCommand(interaction) {
       ephemeral: true,
       content: [
         '**Karma Commands**',
-        '`/panel title description` - configure/post the button panel',
+        '`/panel title description script_id` - configure/post a script-specific panel',
         '`/apply` - create a script, host it, and get a loadstring',
         '`/createscript` - create a script/API secret only',
         '`/scripts` - list scripts',
         '`/generatekey` - generate license keys',
         '`/redeem` - redeem a key',
-        '`/keyinfo` - view key info',
         '`/mykeys` - view your keys',
-        '`/freekey` - get a free key if enabled by having a script',
-        '`/getrole` - get buyer role after redeeming',
         '`/viewscript` - view hosted loadstrings',
         '`/resethwid user` - admin reset HWID for a user',
         '`/reset-hwid` - reset your own key HWID',
@@ -805,11 +758,13 @@ async function handleCommand(interaction) {
     const adminRole = interaction.options.getRole('admin_role', false);
     const customerRole = interaction.options.getRole('customer_role', false);
     const logChannel = interaction.options.getChannel('log_channel', false);
+    const panelScriptId = interaction.options.getString('script_id', false);
 
     const patch = {
       panel_channel_id: interaction.channelId,
       panel_title: panelTitle,
-      panel_description: panelDescription
+      panel_description: panelDescription,
+      panel_script_id: panelScriptId || null
     };
     if (adminRole) patch.admin_role_id = adminRole.id;
     if (customerRole) patch.customer_role_id = customerRole.id;
@@ -818,7 +773,7 @@ async function handleCommand(interaction) {
 
     // Only ONE Discord response: the panel itself. No channel.send + confirmation.
     const panelMessage = await interaction.reply({
-      embeds: [panelEmbed(interaction.guildId)],
+      embeds: [panelEmbed(interaction.guildId, interaction.user.username)],
       components: panelButtons(),
       fetchReply: true
     });
@@ -1109,11 +1064,16 @@ async function sendMyKeys(interaction, userId) {
 
 
 async function sendHostedScripts(interaction) {
-  const rows = db.prepare('SELECT id, name, obfuscated, created_at FROM hosted_scripts ORDER BY created_at DESC LIMIT 500').all();
-  const base = publicBaseUrl();
+  const settings = getSettings(interaction.guildId);
+  let rows;
+  if (settings?.panel_script_id) {
+    rows = db.prepare('SELECT id, name, obfuscated, created_at FROM hosted_scripts WHERE id = ? LIMIT 1').all(settings.panel_script_id);
+  } else {
+    rows = db.prepare('SELECT id, name, obfuscated, created_at FROM hosted_scripts ORDER BY created_at DESC LIMIT 500').all();
+  }
   const content = rows.length
     ? rows.map(r => `**${r.name}** ${r.obfuscated ? '(obfuscated)' : ''}\nLoadstring:\n\`\`\`lua\n${makeLoaderSnippet(r.id)}\n\`\`\``).join('\n')
-    : 'No hosted scripts yet. Staff can use `/hostscript` or `/apply`.';
+    : 'No script is linked to this panel yet. Repost with `/panel ... script_id:<host_id>` or add scripts in the dashboard.';
 
   if (interaction.deferred || interaction.replied) await interaction.followUp({ ephemeral: true, content });
   else await interaction.reply({ ephemeral: true, content });
@@ -1218,7 +1178,7 @@ function kolsecHomePage() {
   <title>Karma Sources - Lua Whitelist & Script Protection</title>
   <meta name="description" content="Karma Sources provides Lua whitelist keys, hosted scripts, obfuscation, HWID resets, and Discord panels." />
   <style>
-    :root{--bg:#030201;--side:#080704;--card:#11100b;--line:#2e2818;--text:#fffaf0;--muted:#b8ad91;--gold:#e4b84f;--gold2:#ffd978;--accent:#e4b84f}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 65% -5%,rgba(228,184,79,.22),transparent 32%),radial-gradient(circle at 10% 35%,rgba(255,217,120,.08),transparent 24%),#030201;color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Arial,sans-serif}body:before{content:'';position:fixed;right:-120px;bottom:-120px;width:520px;height:520px;background:url('/assets/karma-logo.png') center/contain no-repeat;opacity:.045;filter:grayscale(1);pointer-events:none}a{color:inherit;text-decoration:none}code{background:#111;border:1px solid #2b2b2b;border-radius:10px;padding:5px 8px}.layout{display:grid;grid-template-columns:290px 1fr;min-height:100vh}.sidebar{position:sticky;top:0;height:100vh;background:linear-gradient(180deg,rgba(15,12,6,.96),rgba(5,4,2,.94));border-right:1px solid rgba(228,184,79,.22);padding:24px 20px;display:flex;flex-direction:column;backdrop-filter:blur(18px);box-shadow:18px 0 80px rgba(0,0,0,.35)}.brand{display:flex;align-items:center;gap:12px;padding-bottom:24px;border-bottom:1px solid #1b1b1b}.brand img{width:50px;height:50px;border-radius:16px;object-fit:cover;border:1px solid rgba(228,184,79,.45);box-shadow:0 0 35px rgba(228,184,79,.18)}.brand b{display:block;font-size:20px;letter-spacing:-.05em}.brand small{color:#999;font-size:11px;text-transform:uppercase;letter-spacing:.16em}.navgroup{margin-top:24px}.label{font-size:12px;color:#777;text-transform:uppercase;letter-spacing:.12em;margin:0 0 10px 8px}.navitem{display:flex;align-items:center;gap:12px;padding:12px 12px;border-radius:14px;color:#d6d6d6;font-weight:700}.navitem:hover,.navitem.active{background:linear-gradient(90deg,rgba(228,184,79,.18),rgba(255,255,255,.03));color:#fff}.navitem.active{border-left:3px solid var(--gold);padding-left:9px;box-shadow:inset 0 0 0 1px rgba(228,184,79,.10)}.ico{width:22px;text-align:center;color:#fff}.sidebottom{margin-top:auto}.sidebtn{display:flex;align-items:center;justify-content:center;width:100%;padding:15px;border-radius:16px;background:#fff;color:#000;font-weight:950}.version{text-align:center;color:#666;margin-top:14px;font-size:11px;letter-spacing:.18em}.main{min-width:0}.wrap{width:min(1120px,92%);margin:auto}.hero{padding:88px 0 70px}.pill{display:inline-flex;align-items:center;gap:9px;padding:9px 14px;border:1px solid #333;border-radius:999px;background:#080808;color:#ddd}.hero h1{font-size:clamp(48px,8vw,104px);line-height:.9;letter-spacing:-.09em;margin:22px 0;max-width:980px}.hero p{font-size:clamp(17px,2vw,22px);line-height:1.65;color:#b8b8b8;max-width:820px}.actions{display:flex;gap:14px;flex-wrap:wrap;margin-top:28px}.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;border:1px solid var(--gold2);border-radius:999px;background:linear-gradient(180deg,var(--gold2),var(--gold));color:#120d03;padding:13px 20px;font-weight:950;box-shadow:0 16px 50px rgba(228,184,79,.18)}.btn.dark{background:rgba(10,8,4,.75);color:#fff;border-color:rgba(228,184,79,.35);box-shadow:none}.preview{margin-top:44px;border:1px solid #242424;border-radius:30px;background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.02));padding:18px;box-shadow:0 35px 120px rgba(255,255,255,.06)}.screen{border:1px solid #222;border-radius:22px;background:#050505;overflow:hidden}.screenbar{display:flex;justify-content:space-between;align-items:center;padding:16px 18px;border-bottom:1px solid #1f1f1f;color:#999}.screenbar b{color:#fff}.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:18px}.tile{border:1px solid #252525;border-radius:18px;background:#0d0d0d;padding:20px}.tile b{display:block;font-size:32px}.tile span{color:#999}.section{padding:74px 0;border-top:1px solid rgba(255,255,255,.04)}.title{max-width:780px}.kicker{color:#aaa;text-transform:uppercase;letter-spacing:.18em;font-size:12px;font-weight:900}.title h2{font-size:clamp(34px,5vw,64px);line-height:.95;letter-spacing:-.075em;margin:10px 0}.title p{color:#aaa;line-height:1.65}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:30px}.card{border:1px solid rgba(228,184,79,.18);border-radius:28px;background:linear-gradient(180deg,rgba(24,20,10,.9),rgba(7,6,3,.94));padding:28px;min-height:220px;box-shadow:0 20px 70px rgba(0,0,0,.25),inset 0 1px 0 rgba(255,217,120,.06)}.icon{font-size:30px;margin-bottom:18px}.card h3{font-size:22px;margin:0 0 10px}.card p{color:#aaa;line-height:1.65;margin:0}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:28px}.step{border:1px solid #252525;border-radius:28px;background:#080808;padding:26px}.step span{display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:#fff;color:#000;font-weight:950;margin-bottom:16px}.upload{border:1px solid #282828;border-radius:34px;background:radial-gradient(circle at 50% 0,rgba(255,255,255,.12),transparent 34%),#080808;padding:44px}.features-list{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:22px}.features-list div{border:1px solid #242424;border-radius:18px;background:#0c0c0c;padding:18px;color:#ccc}.mobiletop{display:none;padding:14px 18px;border-bottom:1px solid var(--line);align-items:center;gap:12px;background:#070707;position:sticky;top:0;z-index:20}.mobiletop img{width:40px;height:40px;border-radius:12px}@media(max-width:920px){.layout{display:block}.sidebar{position:relative;height:auto}.brand{display:none}.mobiletop{display:flex}.cards,.steps,.tiles,.features-list{grid-template-columns:1fr}.hero{padding-top:44px}.sidebottom{margin-top:20px}}
+    :root{--bg:#000000;--side:#080704;--card:#11100b;--line:#2e2818;--text:#f8fafc;--muted:#a1a1aa;--gold:#ffffff;--gold2:#f5f5f5;--accent:#ffffff}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 65% -5%,rgba(255,255,255,.22),transparent 32%),radial-gradient(circle at 10% 35%,rgba(255,255,255,.08),transparent 24%),#000000;color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Arial,sans-serif}body:before{content:'';position:fixed;right:-120px;bottom:-120px;width:520px;height:520px;background:url('/assets/karma-logo.png') center/contain no-repeat;opacity:.045;filter:grayscale(1);pointer-events:none}a{color:inherit;text-decoration:none}code{background:#111;border:1px solid #2b2b2b;border-radius:10px;padding:5px 8px}.layout{display:grid;grid-template-columns:290px 1fr;min-height:100vh}.sidebar{position:sticky;top:0;height:100vh;background:linear-gradient(180deg,rgba(15,12,6,.96),rgba(5,4,2,.94));border-right:1px solid rgba(255,255,255,.22);padding:24px 20px;display:flex;flex-direction:column;backdrop-filter:blur(18px);box-shadow:18px 0 80px rgba(0,0,0,.35)}.brand{display:flex;align-items:center;gap:12px;padding-bottom:24px;border-bottom:1px solid #1b1b1b}.brand img{width:50px;height:50px;border-radius:16px;object-fit:cover;border:1px solid rgba(255,255,255,.45);box-shadow:0 0 35px rgba(255,255,255,.18)}.brand b{display:block;font-size:20px;letter-spacing:-.05em}.brand small{color:#999;font-size:11px;text-transform:uppercase;letter-spacing:.16em}.navgroup{margin-top:24px}.label{font-size:12px;color:#777;text-transform:uppercase;letter-spacing:.12em;margin:0 0 10px 8px}.navitem{display:flex;align-items:center;gap:12px;padding:12px 12px;border-radius:14px;color:#d6d6d6;font-weight:700}.navitem:hover,.navitem.active{background:linear-gradient(90deg,rgba(255,255,255,.18),rgba(255,255,255,.03));color:#fff}.navitem.active{border-left:3px solid var(--gold);padding-left:9px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.10)}.ico{width:22px;text-align:center;color:#fff}.sidebottom{margin-top:auto}.sidebtn{display:flex;align-items:center;justify-content:center;width:100%;padding:15px;border-radius:16px;background:#fff;color:#000;font-weight:950}.version{text-align:center;color:#666;margin-top:14px;font-size:11px;letter-spacing:.18em}.main{min-width:0}.wrap{width:min(1120px,92%);margin:auto}.hero{padding:88px 0 70px}.pill{display:inline-flex;align-items:center;gap:9px;padding:9px 14px;border:1px solid #333;border-radius:999px;background:#080808;color:#ddd}.hero h1{font-size:clamp(48px,8vw,104px);line-height:.9;letter-spacing:-.09em;margin:22px 0;max-width:980px}.hero p{font-size:clamp(17px,2vw,22px);line-height:1.65;color:#b8b8b8;max-width:820px}.actions{display:flex;gap:14px;flex-wrap:wrap;margin-top:28px}.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;border:1px solid var(--gold2);border-radius:999px;background:linear-gradient(180deg,var(--gold2),var(--gold));color:#000;padding:13px 20px;font-weight:950;box-shadow:0 16px 50px rgba(255,255,255,.18)}.btn.dark{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.35);box-shadow:none}.preview{margin-top:44px;border:1px solid #242424;border-radius:30px;background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.02));padding:18px;box-shadow:0 35px 120px rgba(255,255,255,.06)}.screen{border:1px solid #222;border-radius:22px;background:#050505;overflow:hidden}.screenbar{display:flex;justify-content:space-between;align-items:center;padding:16px 18px;border-bottom:1px solid #1f1f1f;color:#999}.screenbar b{color:#fff}.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:18px}.tile{border:1px solid #252525;border-radius:18px;background:#0d0d0d;padding:20px}.tile b{display:block;font-size:32px}.tile span{color:#999}.section{padding:74px 0;border-top:1px solid rgba(255,255,255,.04)}.title{max-width:780px}.kicker{color:#aaa;text-transform:uppercase;letter-spacing:.18em;font-size:12px;font-weight:900}.title h2{font-size:clamp(34px,5vw,64px);line-height:.95;letter-spacing:-.075em;margin:10px 0}.title p{color:#aaa;line-height:1.65}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:30px}.card{border:1px solid rgba(255,255,255,.18);border-radius:28px;background:linear-gradient(180deg,rgba(24,20,10,.9),rgba(7,6,3,.94));padding:28px;min-height:220px;box-shadow:0 20px 70px rgba(0,0,0,.25),inset 0 1px 0 rgba(255,255,255,.06)}.icon{font-size:30px;margin-bottom:18px}.card h3{font-size:22px;margin:0 0 10px}.card p{color:#aaa;line-height:1.65;margin:0}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:28px}.step{border:1px solid #252525;border-radius:28px;background:#080808;padding:26px}.step span{display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:#fff;color:#000;font-weight:950;margin-bottom:16px}.upload{border:1px solid #282828;border-radius:34px;background:radial-gradient(circle at 50% 0,rgba(255,255,255,.12),transparent 34%),#080808;padding:44px}.features-list{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:22px}.features-list div{border:1px solid #242424;border-radius:18px;background:#0c0c0c;padding:18px;color:#ccc}.mobiletop{display:none;padding:14px 18px;border-bottom:1px solid var(--line);align-items:center;gap:12px;background:#070707;position:sticky;top:0;z-index:20}.mobiletop img{width:40px;height:40px;border-radius:12px}@media(max-width:920px){.layout{display:block}.sidebar{position:relative;height:auto}.brand{display:none}.mobiletop{display:flex}.cards,.steps,.tiles,.features-list{grid-template-columns:1fr}.hero{padding-top:44px}.sidebottom{margin-top:20px}}
   </style>
 </head>
 <body>
@@ -1260,6 +1220,7 @@ function discordDashboardPage(user, req = { query: {} }) {
   const remaining = user.id === OWNER_ID ? 'Unlimited' : Math.max(0, MAX_WEB_SCRIPTS_PER_USER - myScriptCount);
   const botInvite = `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(OAUTH_CLIENT_ID)}&permissions=268435456&scope=bot%20applications.commands`;
   const isOwner = user.id === OWNER_ID;
+  const canEditSelected = selected && (selected.created_by === user.id || isOwner);
 
   const scriptLinks = scripts.length
     ? scripts.map(s => `<a class="scriptLink ${selected?.id === s.id ? 'active' : ''}" href="/dashboard?tab=scripts&script=${s.id}"><b>${escapeHtml(s.name)}</b><small>${s.obfuscated ? 'Obfuscated' : 'Plain'} · ${escapeHtml(s.created_at)}</small></a>`).join('')
@@ -1267,9 +1228,9 @@ function discordDashboardPage(user, req = { query: {} }) {
 
   let content = '';
   if (tab === 'scripts') {
-    content = selected ? `<div class="card"><div class="cardHead"><div><p class="eyebrow">Selected Script</p><h2>${escapeHtml(selected.name)}</h2><p class="muted">${selected.obfuscated ? 'Obfuscated build · edits auto re-obfuscate on save' : 'Plain build'} · ${escapeHtml(selected.created_at)}</p></div></div><h3>Loadstring</h3><code class="block">${makeLoaderSnippet(selected.id)}</code><h3>Edit Script</h3><form method="post" action="/dashboard/scripts/${selected.id}/update"><label>Script name</label><input name="name" maxlength="80" value="${escapeHtml(selected.name)}" required><label>Actual Source</label><textarea name="code" maxlength="4000" required>${escapeHtml(selected.source_code || selected.code)}</textarea><label class="check"><input type="checkbox" name="obfuscate" value="true" ${selected.obfuscated ? 'checked' : ''}> Obfuscate on save</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option><option value="luraph">Luraph API</option></select><div class="buttonRow"><button type="submit">Save Permanently</button><button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate Download</button></div></form></div>` + `<div class="card"><p class="eyebrow">Add Script</p><h2>Permanent script upload</h2><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option><option value="luraph">Luraph API</option></select><button>Save Script</button></form></div>` : `<div class="card"><h2>Scripts</h2><p class="muted">Add your first script below. Scripts are saved permanently unless the owner removes them from the database.</p></div><div class="card"><p class="eyebrow">Add Script</p><h2>Permanent script upload</h2><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option><option value="luraph">Luraph API</option></select><button>Save Script</button></form></div>`;
+    content = selected ? `<div class="card"><div class="cardHead"><div><p class="eyebrow">Selected Script</p><h2>${escapeHtml(selected.name)}</h2><p class="muted">${selected.obfuscated ? 'Obfuscated build · edits auto re-obfuscate on save' : 'Plain build'} · ${escapeHtml(selected.created_at)}</p></div></div><h3>Loadstring</h3><code class="block">${makeLoaderSnippet(selected.id)}</code>${canEditSelected ? `<h3>Edit Script</h3><form method="post" action="/dashboard/scripts/${selected.id}/update"><label>Script name</label><input name="name" maxlength="80" value="${escapeHtml(selected.name)}" required><label>Actual Source</label><textarea name="code" maxlength="4000" required>${escapeHtml(selected.source_code || selected.code)}</textarea><label class="check"><input type="checkbox" name="obfuscate" value="true" ${selected.obfuscated ? 'checked' : ''}> Obfuscate on save</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><div class="buttonRow"><button type="submit">Save Permanently</button><button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate Download</button></div></form>` : `<p class="muted">This script is available as a loadstring. Source editing is limited to the owner/creator.</p>`}</div>` + `<div class="card"><p class="eyebrow">Add Script</p><h2>Permanent script upload</h2><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><button>Save Script</button></form></div>` : `<div class="card"><h2>Scripts</h2><p class="muted">Add your first script below. Scripts are saved permanently unless the owner removes them from the database.</p></div><div class="card"><p class="eyebrow">Add Script</p><h2>Permanent script upload</h2><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><button>Save Script</button></form></div>`;
   } else if (tab === 'sources') {
-    content = `<div class="card"><p class="eyebrow">Sources</p><h2>Create a hosted script</h2><p class="muted">Upload a Lua or text file, or paste source manually. Obfuscation can run before hosting.</p><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><p class="hint">File contents will be placed into the source box below.</p><label>Source code</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("Karma Sources")' required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before hosting</label><label>Obfuscation level</label><select name="level"><option value="light">Light</option><option value="standard" selected>Standard</option><option value="max">Maximum</option><option value="luraph">Luraph API</option></select><div class="buttonRow"><button type="submit">Host Script</button><button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate Only</button></div></form></div>`;
+    content = `<div class="card"><p class="eyebrow">Sources</p><h2>Create a hosted script</h2><p class="muted">Upload a Lua or text file, or paste source manually. Obfuscation can run before hosting.</p><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><p class="hint">File contents will be placed into the source box below.</p><label>Source code</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("Karma Sources")' required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before hosting</label><label>Obfuscation level</label><select name="level"><option value="light">Light</option><option value="standard" selected>Standard</option><option value="max">Maximum</option></select><div class="buttonRow"><button type="submit">Host Script</button><button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate Only</button></div></form></div>`;
   } else if (tab === 'keys') {
     const projects = db.prepare('SELECT id, name, created_at FROM scripts WHERE created_by = ? ORDER BY created_at DESC').all(user.id);
     const keys = db.prepare('SELECT l.*, s.name AS script_name FROM licenses l JOIN scripts s ON s.id = l.script_id WHERE l.created_by = ? ORDER BY l.created_at DESC LIMIT 50').all(user.id);
@@ -1279,10 +1240,10 @@ function discordDashboardPage(user, req = { query: {} }) {
       content = `<div class="card"><h2>Script Storage</h2><p class="muted">Only the owner can access global storage.</p></div>`;
     } else {
       const stored = db.prepare('SELECT * FROM hosted_scripts WHERE created_by = ? ORDER BY created_at DESC LIMIT 500').all(OWNER_ID);
-      content = `<div class="card"><p class="eyebrow">Owner Storage</p><h2>Script Storage</h2><p class="muted">Owner account has unlimited scripts. Add global scripts here and use them in panels/loadstrings.</p><form method="post" action="/owner/storage"><label>Name</label><input name="name" maxlength="80" required><label>Source</label><textarea name="code" maxlength="4000" required></textarea><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option><option value="luraph">Luraph API</option></select><label class="check"><input type="checkbox" name="obfuscate" value="true" checked> Obfuscate before storing</label><button>Add Stored Script</button></form><h3>Stored Scripts</h3>${stored.map(r=>`<div class="row"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.id)} · ${r.obfuscated ? 'Obfuscated' : 'Plain'}</small><code class="block">${makeLoaderSnippet(r.id)}</code></div>`).join('') || '<p class="muted">No stored scripts.</p>'}</div>`;
+      content = `<div class="card"><p class="eyebrow">Owner Storage</p><h2>Script Storage</h2><p class="muted">Owner account has unlimited scripts. Add global scripts here and use them in panels/loadstrings.</p><form method="post" action="/owner/storage"><label>Name</label><input name="name" maxlength="80" required><label>Source</label><textarea name="code" maxlength="4000" required></textarea><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><label class="check"><input type="checkbox" name="obfuscate" value="true" checked> Obfuscate before storing</label><button>Add Stored Script</button></form><h3>Stored Scripts</h3>${stored.map(r=>`<div class="row"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.id)} · ${r.obfuscated ? 'Obfuscated' : 'Plain'}</small><code class="block">${makeLoaderSnippet(r.id)}</code></div>`).join('') || '<p class="muted">No stored scripts.</p>'}</div>`;
     }
   } else if (tab === 'obfuscate') {
-    content = `<div class="card"><p class="eyebrow">Obfuscator</p><h2>Protect Lua source</h2><p class="muted">Kers0ne-style protected wrapper with randomized locals, rolling XOR, checksum validation, and anti-tamper fallback.</p><form method="post" action="/dashboard/obfuscate"><label>Filename</label><input name="filename" value="obfuscated.lua"><label>Lua source</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("protect me")' required></textarea><label>Obfuscation level</label><select name="level"><option value="light">Light</option><option value="standard" selected>Standard</option><option value="max">Maximum</option><option value="luraph">Luraph API</option></select><div class="buttonRow"><button type="submit">Download Obfuscated Lua</button><a class="btn dark" href="/dashboard?tab=sources">Upload Source</a></div></form><div class="featureGrid"><div>Anti-tamper checksum</div><div>Anti-Dump Hardening on new builds</div><div>Rolling XOR byte encoding</div><div>Decoy layer for automated dumps</div><div>Random local names</div><div>Protected output banner</div></div></div>`;
+    content = `<div class="card"><p class="eyebrow">Obfuscator</p><h2>Protect Lua source</h2><p class="muted">Kers0ne-style protected wrapper with randomized locals, rolling XOR, checksum validation, and anti-tamper fallback.</p><form method="post" action="/dashboard/obfuscate"><label>Filename</label><input name="filename" value="obfuscated.lua"><label>Lua source</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("protect me")' required></textarea><label>Obfuscation level</label><select name="level"><option value="light">Light</option><option value="standard" selected>Standard</option><option value="max">Maximum</option></select><div class="buttonRow"><button type="submit">Download Obfuscated Lua</button><a class="btn dark" href="/dashboard?tab=sources">Upload Source</a></div></form><div class="featureGrid"><div>Anti-tamper checksum</div><div>Anti-Dump Hardening on new builds</div><div>Rolling XOR byte encoding</div><div>Decoy layer for automated dumps</div><div>Random local names</div><div>Protected output banner</div></div></div>`;
   } else if (tab === 'how') {
     content = `<div class="card"><p class="eyebrow">How It Works</p><h2>Complete workflow</h2><div class="stepsDash"><div><span>1</span><b>Upload source</b><p>Go to Sources and upload a Lua file or paste code.</p></div><div><span>2</span><b>Obfuscate or host</b><p>Enable obfuscation and create a hosted loadstring.</p></div><div><span>3</span><b>Link Discord</b><p>Run <code>/link api key:${apiKey}</code> in your server.</p></div><div><span>4</span><b>Generate keys</b><p>Use <code>/generatekey</code> and the panel for buyers.</p></div></div></div>`;
   } else if (tab === 'tutorials') {
@@ -1304,7 +1265,7 @@ function discordDashboardPage(user, req = { query: {} }) {
     content = `<div class="card heroCard"><p class="eyebrow">Overview</p><h2>Dashboard</h2><p class="muted">Manage scripts, sources, obfuscation, tutorials, Discord links, redeem codes, and owner tools from one clean dashboard.</p><div class="stats"><div class="stat"><div class="num">${scripts.length}</div><span>Scripts used</span></div><div class="stat"><div class="num">${remaining}</div><span>Slots left</span></div><div class="stat"><div class="num">1000</div><span>Max scripts</span></div></div><div class="anime"></div></div>`;
   }
 
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma Dashboard</title><style>:root{--bg:#030201;--shell:#0c0904;--panel:#12100a;--panel2:#19150b;--line:#332b17;--muted:#b8ad91;--text:#fffaf0;--gold:#e4b84f;--gold2:#ffd978}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -10%,rgba(228,184,79,.22),transparent 30%),radial-gradient(circle at 85% 25%,rgba(255,217,120,.07),transparent 24%),#030201;color:var(--text);font-family:"SF Pro Display","Aptos","Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.01em}body:before{content:'';position:fixed;right:-140px;bottom:-140px;width:560px;height:560px;background:url('/assets/karma-logo.png') center/contain no-repeat;opacity:.045;filter:grayscale(1);pointer-events:none}a{color:inherit;text-decoration:none}.page{padding:28px}.shell{max-width:1500px;margin:0 auto;min-height:calc(100vh - 56px);display:grid;grid-template-columns:280px 270px 1fr;border:1px solid rgba(228,184,79,.22);border-radius:34px;overflow:hidden;background:linear-gradient(180deg,rgba(255,217,120,.055),rgba(255,255,255,.015));box-shadow:0 34px 140px rgba(0,0,0,.58),0 0 0 1px rgba(255,255,255,.025)}.side{background:linear-gradient(180deg,rgba(17,13,6,.96),rgba(7,5,2,.96));border-right:1px solid rgba(228,184,79,.20);padding:22px;overflow:auto;box-shadow:18px 0 80px rgba(0,0,0,.28)}.brand{display:flex;gap:12px;align-items:center;border-bottom:1px solid #242427;padding-bottom:20px}.brand img,.avatar{width:48px;height:48px;border-radius:16px;object-fit:cover;border:1px solid rgba(228,184,79,.38);box-shadow:0 0 35px rgba(228,184,79,.14)}.brand b{display:block;font-size:18px;font-weight:850}.brand small,.muted,small{color:var(--muted)}.nav{margin-top:20px}.nav a{display:flex;align-items:center;padding:12px 13px;border-radius:14px;color:#d4d4d8;font-weight:720;margin-bottom:4px}.nav a:hover,.nav a.active{background:linear-gradient(90deg,rgba(228,184,79,.18),rgba(255,255,255,.035));color:#fff;box-shadow:inset 3px 0 0 var(--gold)}.scriptsPane{background:rgba(6,5,3,.78);border-right:1px solid rgba(228,184,79,.16);padding:20px;overflow:auto}.scriptLink{display:block;border:1px solid rgba(228,184,79,.14);background:rgba(16,13,7,.86);border-radius:16px;padding:13px;margin-bottom:10px}.scriptLink.active{border-color:var(--gold);background:linear-gradient(180deg,rgba(228,184,79,.14),rgba(18,15,8,.88));box-shadow:0 10px 34px rgba(228,184,79,.08)}.main{padding:28px;min-width:0;position:relative;overflow:hidden}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.profile{display:flex;gap:12px;align-items:center}.card{border:1px solid rgba(228,184,79,.16);border-radius:28px;background:linear-gradient(180deg,rgba(24,20,10,.92),rgba(8,7,4,.97));padding:28px;box-shadow:inset 0 1px 0 rgba(255,217,120,.06),0 26px 90px rgba(0,0,0,.32);margin-bottom:18px;position:relative;z-index:1}.card h2{font-size:clamp(32px,4vw,56px);line-height:.95;letter-spacing:-.06em;margin:6px 0 12px}.eyebrow{color:#a1a1aa;text-transform:uppercase;letter-spacing:.18em;font-size:12px;font-weight:850;margin:0 0 8px}.btn,button{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--gold2);background:linear-gradient(180deg,var(--gold2),var(--gold));color:#120d03;border-radius:999px;padding:12px 18px;font-weight:950;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;box-shadow:0 12px 38px rgba(228,184,79,.16)}.btn:hover,button:hover{transform:translateY(-1px);box-shadow:0 14px 42px rgba(255,255,255,.10)}.btn.dark{background:rgba(10,8,4,.75);color:#fff;border-color:rgba(228,184,79,.32);box-shadow:none}.secondary{background:rgba(10,8,4,.75);color:#fff;border-color:rgba(228,184,79,.32)}.buttonRow{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:6px}.danger{background:#220f0f;color:#ffb4ad;border-color:#5b2521}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}.stat{border:1px solid rgba(228,184,79,.14);border-radius:18px;background:rgba(10,8,4,.82);padding:18px}.num{font-size:38px;font-weight:900;letter-spacing:-.05em}select{background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:10px;font:inherit}.inlineForm{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}input,textarea{width:100%;background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:12px;margin:8px 0 14px;font:inherit}textarea{min-height:260px}.check{display:flex;gap:10px;align-items:center}.check input{width:auto}.block{display:block;white-space:pre-wrap;word-break:break-all;padding:12px;margin:10px 0;background:#080809;border:1px solid #343438;border-radius:14px}.row{border:1px solid #27272a;border-radius:14px;padding:12px;margin:8px 0;background:#0b0b0c}.featureGrid,.stepsDash{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:16px}.featureGrid div,.stepsDash div{border:1px solid #27272a;border-radius:16px;background:#0b0b0c;padding:16px}.stepsDash span{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#fff;color:#000;font-weight:900}.anime{height:220px;border-radius:24px;border:1px solid #27272a;margin-top:22px;background:radial-gradient(circle at 30% 50%,rgba(255,255,255,.18),transparent 18%),radial-gradient(circle at 70% 50%,rgba(255,255,255,.11),transparent 20%),linear-gradient(120deg,#000,#111,#000);background-size:160% 160%;animation:movebg 6s infinite alternate;position:relative;overflow:hidden}.anime:after{content:'';position:absolute;inset:-40%;background:conic-gradient(from 0deg,transparent,rgba(255,255,255,.12),transparent 35%);animation:spin 8s linear infinite}@keyframes movebg{to{background-position:100% 60%}}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:1100px){.page{padding:12px}.shell{grid-template-columns:1fr;border-radius:22px}.side,.scriptsPane{border-right:0;border-bottom:1px solid var(--line)}.stats,.featureGrid,.stepsDash{grid-template-columns:1fr}.top{align-items:flex-start;gap:16px;flex-direction:column}}</style></head><body><div class="page"><div class="shell"><aside class="side"><div class="brand"><img src="/assets/karma-logo.png"><div><b>Karma Sources</b><small>${username}</small></div></div><nav class="nav"><a class="${tab==='overview'?'active':''}" href="/dashboard">Overview</a><a class="${tab==='scripts'?'active':''}" href="/dashboard?tab=scripts">Scripts</a><a class="${tab==='keys'?'active':''}" href="/dashboard?tab=keys">Keys</a><a class="${tab==='obfuscate'?'active':''}" href="/dashboard?tab=obfuscate">Obfuscate</a><a class="${tab==='how'?'active':''}" href="/dashboard?tab=how">How It Works</a><a class="${tab==='tutorials'?'active':''}" href="/dashboard?tab=tutorials">Tutorials</a><a class="${tab==='redeem'?'active':''}" href="/dashboard?tab=redeem">Redeem</a><a class="${tab==='discord'?'active':''}" href="/dashboard?tab=discord">Discord Bot</a><a class="${tab==='settings'?'active':''}" href="/dashboard?tab=settings">Settings</a>${isOwner?`<a class="${tab==='owner'?'active':''}" href="/dashboard?tab=owner">Owner Panel</a>`:''}<a href="/logout">Logout</a></nav></aside><aside class="scriptsPane"><h3>Scripts</h3>${scriptLinks}<a class="btn" href="/dashboard?tab=scripts">New Script</a></aside><main class="main"><div class="top"><div class="profile"><img class="avatar" src="${avatar}"><div><b>${username}</b><br><small>${scripts.length}/1000 scripts used</small></div></div><a class="btn dark" href="/">Home</a></div>${content}</main></div></div><script>document.getElementById('fileInput')?.addEventListener('change', async e => { const f=e.target.files[0]; if(!f) return; document.querySelector('input[name="name"]').value ||= f.name.replace(/\.(lua|txt)$/i,''); document.getElementById('codeBox').value = await f.text(); });</script></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma Dashboard</title><style>:root{--bg:#000000;--shell:#0b0b0c;--panel:#101011;--panel2:#151516;--line:#2a2a2d;--muted:#a1a1aa;--text:#f8fafc;--gold:#ffffff;--gold2:#f5f5f5}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -10%,rgba(255,255,255,.22),transparent 30%),radial-gradient(circle at 85% 25%,rgba(255,255,255,.07),transparent 24%),#000000;color:var(--text);font-family:"SF Pro Display","Aptos","Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.01em}body:before{content:'';position:fixed;right:-140px;bottom:-140px;width:560px;height:560px;background:url('/assets/karma-logo.png') center/contain no-repeat;opacity:.045;filter:grayscale(1);pointer-events:none}a{color:inherit;text-decoration:none}.page{padding:28px}.shell{max-width:1500px;margin:0 auto;min-height:calc(100vh - 56px);display:grid;grid-template-columns:280px 270px 1fr;border:1px solid rgba(255,255,255,.22);border-radius:34px;overflow:hidden;background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.015));box-shadow:0 34px 140px rgba(0,0,0,.58),0 0 0 1px rgba(255,255,255,.025)}.side{background:linear-gradient(180deg,rgba(12,12,12,.96),rgba(5,5,5,.96));border-right:1px solid rgba(255,255,255,.20);padding:22px;overflow:auto;box-shadow:18px 0 80px rgba(0,0,0,.28)}.brand{display:flex;gap:12px;align-items:center;border-bottom:1px solid #242427;padding-bottom:20px}.brand img,.avatar{width:48px;height:48px;border-radius:16px;object-fit:cover;border:1px solid rgba(255,255,255,.38);box-shadow:0 0 35px rgba(255,255,255,.14)}.brand b{display:block;font-size:18px;font-weight:850}.brand small,.muted,small{color:var(--muted)}.nav{margin-top:20px}.nav a{display:flex;align-items:center;padding:12px 13px;border-radius:14px;color:#d4d4d8;font-weight:720;margin-bottom:4px}.nav a:hover,.nav a.active{background:linear-gradient(90deg,rgba(255,255,255,.18),rgba(255,255,255,.035));color:#fff;box-shadow:inset 3px 0 0 var(--gold)}.scriptsPane{background:rgba(7,7,7,.78);border-right:1px solid rgba(255,255,255,.16);padding:20px;overflow:auto}.scriptLink{display:block;border:1px solid rgba(255,255,255,.14);background:rgba(14,14,14,.86);border-radius:16px;padding:13px;margin-bottom:10px}.scriptLink.active{border-color:var(--gold);background:linear-gradient(180deg,rgba(255,255,255,.14),rgba(18,18,18,.88));box-shadow:0 10px 34px rgba(255,255,255,.08)}.main{padding:28px;min-width:0;position:relative;overflow:hidden}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.profile{display:flex;gap:12px;align-items:center}.card{border:1px solid rgba(255,255,255,.16);border-radius:28px;background:linear-gradient(180deg,rgba(24,24,24,.92),rgba(8,8,8,.97));padding:28px;box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 26px 90px rgba(0,0,0,.32);margin-bottom:18px;position:relative;z-index:1}.card h2{font-size:clamp(32px,4vw,56px);line-height:.95;letter-spacing:-.06em;margin:6px 0 12px}.eyebrow{color:#a1a1aa;text-transform:uppercase;letter-spacing:.18em;font-size:12px;font-weight:850;margin:0 0 8px}.btn,button{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--gold2);background:linear-gradient(180deg,var(--gold2),var(--gold));color:#000;border-radius:999px;padding:12px 18px;font-weight:950;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;box-shadow:0 12px 38px rgba(255,255,255,.16)}.btn:hover,button:hover{transform:translateY(-1px);box-shadow:0 14px 42px rgba(255,255,255,.10)}.btn.dark{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32);box-shadow:none}.secondary{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32)}.buttonRow{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:6px}.danger{background:#220f0f;color:#ffb4ad;border-color:#5b2521}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}.stat{border:1px solid rgba(255,255,255,.14);border-radius:18px;background:rgba(10,10,10,.82);padding:18px}.num{font-size:38px;font-weight:900;letter-spacing:-.05em}select{background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:10px;font:inherit}.inlineForm{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}input,textarea{width:100%;background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:12px;margin:8px 0 14px;font:inherit}textarea{min-height:260px}.check{display:flex;gap:10px;align-items:center}.check input{width:auto}.block{display:block;white-space:pre-wrap;word-break:break-all;padding:12px;margin:10px 0;background:#080809;border:1px solid #343438;border-radius:14px}.row{border:1px solid #27272a;border-radius:14px;padding:12px;margin:8px 0;background:#0b0b0c}.featureGrid,.stepsDash{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:16px}.featureGrid div,.stepsDash div{border:1px solid #27272a;border-radius:16px;background:#0b0b0c;padding:16px}.stepsDash span{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#fff;color:#000;font-weight:900}.anime{height:220px;border-radius:24px;border:1px solid #27272a;margin-top:22px;background:radial-gradient(circle at 30% 50%,rgba(255,255,255,.18),transparent 18%),radial-gradient(circle at 70% 50%,rgba(255,255,255,.11),transparent 20%),linear-gradient(120deg,#000,#111,#000);background-size:160% 160%;animation:movebg 6s infinite alternate;position:relative;overflow:hidden}.anime:after{content:'';position:absolute;inset:-40%;background:conic-gradient(from 0deg,transparent,rgba(255,255,255,.12),transparent 35%);animation:spin 8s linear infinite}@keyframes movebg{to{background-position:100% 60%}}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:1100px){.page{padding:12px}.shell{grid-template-columns:1fr;border-radius:22px}.side,.scriptsPane{border-right:0;border-bottom:1px solid var(--line)}.stats,.featureGrid,.stepsDash{grid-template-columns:1fr}.top{align-items:flex-start;gap:16px;flex-direction:column}}</style></head><body><div class="page"><div class="shell"><aside class="side"><div class="brand"><img src="/assets/karma-logo.png"><div><b>Karma Sources</b><small>${username}</small></div></div><nav class="nav"><a class="${tab==='overview'?'active':''}" href="/dashboard">Overview</a><a class="${tab==='scripts'?'active':''}" href="/dashboard?tab=scripts">Scripts</a><a class="${tab==='keys'?'active':''}" href="/dashboard?tab=keys">Keys</a><a class="${tab==='obfuscate'?'active':''}" href="/dashboard?tab=obfuscate">Obfuscate</a><a class="${tab==='how'?'active':''}" href="/dashboard?tab=how">How It Works</a><a class="${tab==='tutorials'?'active':''}" href="/dashboard?tab=tutorials">Tutorials</a><a class="${tab==='redeem'?'active':''}" href="/dashboard?tab=redeem">Redeem</a><a class="${tab==='discord'?'active':''}" href="/dashboard?tab=discord">Discord Bot</a><a class="${tab==='settings'?'active':''}" href="/dashboard?tab=settings">Settings</a>${isOwner?`<a class="${tab==='owner'?'active':''}" href="/dashboard?tab=owner">Owner Panel</a>`:''}<a href="/logout">Logout</a></nav></aside><aside class="scriptsPane"><h3>Scripts</h3>${scriptLinks}<a class="btn" href="/dashboard?tab=scripts">New Script</a></aside><main class="main"><div class="top"><div class="profile"><img class="avatar" src="${avatar}"><div><b>${username}</b><br><small>${scripts.length}/1000 scripts used</small></div></div><a class="btn dark" href="/">Home</a></div>${content}</main></div></div><script>document.getElementById('fileInput')?.addEventListener('change', async e => { const f=e.target.files[0]; if(!f) return; document.querySelector('input[name="name"]').value ||= f.name.replace(/\.(lua|txt)$/i,''); document.getElementById('codeBox').value = await f.text(); });</script></body></html>`;
 }
 
 function makeSession(user) {
