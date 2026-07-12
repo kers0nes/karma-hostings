@@ -170,6 +170,7 @@ const commands = [
     .setDescription('Host Lua code on Render and get a loadstring')
     .addStringOption(o => o.setName('name').setDescription('Script name').setRequired(true).setMaxLength(80))
     .addStringOption(o => o.setName('code').setDescription('Lua code to host, max 4000 chars').setRequired(true).setMaxLength(4000))
+    .addStringOption(o => o.setName('script_id').setDescription('Optional script/product ID from /createscript to update instead of duplicating').setRequired(false))
     .addBooleanOption(o => o.setName('obfuscate').setDescription('Run the code through your obfuscator before hosting'))
     .addStringOption(o => o.setName('level').setDescription('Obfuscation level').setRequired(false).addChoices(
       { name: 'Light', value: 'light' },
@@ -1138,11 +1139,6 @@ async function handleCommand(interaction) {
   if (commandName === 'apply') {
     const name = interaction.options.getString('name', true);
     const originalCode = interaction.options.getString('code', true);
-    const linkedScriptId = interaction.options.getString('script_id', false);
-    if (linkedScriptId) {
-      const product = db.prepare('SELECT * FROM scripts WHERE id = ? AND guild_id = ?').get(linkedScriptId, interaction.guildId);
-      if (!product) return interaction.reply({ ephemeral: true, content: 'Invalid script_id. Use `/createscript` first, then use that script ID here.' });
-    }
     const shouldObfuscate = interaction.options.getBoolean('obfuscate') || false;
     const level = interaction.options.getString('level') || 'standard';
 
@@ -1165,7 +1161,7 @@ async function handleCommand(interaction) {
       name,
       code: String(finalCode),
       sourceCode: originalCode,
-      linkedScriptId,
+      linkedScriptId: script.id,
       obfuscated: shouldObfuscate,
       createdBy: interaction.user.id
     });
@@ -1258,6 +1254,11 @@ async function handleCommand(interaction) {
   if (commandName === 'hostscript') {
     const name = interaction.options.getString('name', true);
     const originalCode = interaction.options.getString('code', true);
+    const linkedScriptId = interaction.options.getString('script_id', false);
+    if (linkedScriptId) {
+      const product = db.prepare('SELECT * FROM scripts WHERE id = ? AND guild_id = ?').get(linkedScriptId, interaction.guildId);
+      if (!product) return interaction.reply({ ephemeral: true, content: 'Invalid script_id. Use `/createscript` first, then use that script ID here.' });
+    }
     const shouldObfuscate = interaction.options.getBoolean('obfuscate') || false;
     const level = interaction.options.getString('level') || 'standard';
 
@@ -1278,7 +1279,7 @@ async function handleCommand(interaction) {
       name,
       code: String(finalCode),
       sourceCode: originalCode,
-      linkedScriptId: script.id,
+      linkedScriptId,
       obfuscated: shouldObfuscate,
       createdBy: interaction.user.id
     });
