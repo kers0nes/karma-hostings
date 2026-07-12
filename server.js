@@ -32,8 +32,17 @@ const {
   DATABASE_PATH = './data.sqlite',
   GLOBAL_API_TOKEN,
   PUBLIC_BASE_URL,
-  OBFUSCATOR_API_URL = 'https://leakd-detector.up.railway.app'
+  OBFUSCATOR_API_URL = 'https://leakd-detector.up.railway.app',
+  DISCORD_OAUTH_CLIENT_ID,
+  DISCORD_CLIENT_SECRET,
+  SESSION_SECRET,
+  DISCORD_INVITE_URL = 'https://discord.com'
 } = process.env;
+
+const OAUTH_CLIENT_ID = DISCORD_OAUTH_CLIENT_ID || CLIENT_ID || '1525736430813450342';
+const SESSION_SIGNING_SECRET = SESSION_SECRET || DISCORD_CLIENT_SECRET || crypto.randomBytes(32).toString('hex');
+const MAX_WEB_SCRIPTS_PER_USER = 1000;
+const oauthStates = new Map();
 
 if (!DISCORD_TOKEN) {
   console.error('Missing DISCORD_TOKEN environment variable.');
@@ -57,7 +66,9 @@ const commands = [
     .addRoleOption(o => o.setName('admin_role').setDescription('Role allowed to manage Kolsec').setRequired(true))
     .addRoleOption(o => o.setName('customer_role').setDescription('Buyer role given after redeeming').setRequired(true))
     .addChannelOption(o => o.setName('panel_channel').setDescription('Channel to post the panel').addChannelTypes(ChannelType.GuildText).setRequired(true))
-    .addChannelOption(o => o.setName('log_channel').setDescription('Logs channel').addChannelTypes(ChannelType.GuildText).setRequired(false)),
+    .addChannelOption(o => o.setName('log_channel').setDescription('Logs channel').addChannelTypes(ChannelType.GuildText).setRequired(false))
+    .addStringOption(o => o.setName('title').setDescription('Panel title, example: Drizzy Hub').setRequired(false).setMaxLength(100))
+    .addStringOption(o => o.setName('description').setDescription('Panel description').setRequired(false).setMaxLength(500)),
 
   new SlashCommandBuilder()
     .setName('panel')
@@ -195,6 +206,8 @@ CREATE TABLE IF NOT EXISTS guild_settings (
   log_channel_id TEXT,
   panel_channel_id TEXT,
   panel_message_id TEXT,
+  panel_title TEXT,
+  panel_description TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -238,6 +251,14 @@ CREATE INDEX IF NOT EXISTS idx_licenses_user ON licenses(discord_user_id);
 CREATE INDEX IF NOT EXISTS idx_hosted_scripts_guild ON hosted_scripts(guild_id);
 `);
 
+// Migrations for older Render SQLite databases.
+for (const migration of [
+  'ALTER TABLE guild_settings ADD COLUMN panel_title TEXT',
+  'ALTER TABLE guild_settings ADD COLUMN panel_description TEXT'
+]) {
+  try { db.prepare(migration).run(); } catch (_) {}
+}
+
 function hashSecret(secret) {
   return crypto.createHash('sha256').update(secret).digest('hex');
 }
@@ -271,14 +292,16 @@ function upsertSettings(guildId, patch) {
   const next = { ...current, ...patch };
 
   db.prepare(`
-    INSERT INTO guild_settings (guild_id, admin_role_id, customer_role_id, log_channel_id, panel_channel_id, panel_message_id, updated_at)
-    VALUES (@guild_id, @admin_role_id, @customer_role_id, @log_channel_id, @panel_channel_id, @panel_message_id, CURRENT_TIMESTAMP)
+    INSERT INTO guild_settings (guild_id, admin_role_id, customer_role_id, log_channel_id, panel_channel_id, panel_message_id, panel_title, panel_description, updated_at)
+    VALUES (@guild_id, @admin_role_id, @customer_role_id, @log_channel_id, @panel_channel_id, @panel_message_id, @panel_title, @panel_description, CURRENT_TIMESTAMP)
     ON CONFLICT(guild_id) DO UPDATE SET
       admin_role_id=excluded.admin_role_id,
       customer_role_id=excluded.customer_role_id,
       log_channel_id=excluded.log_channel_id,
       panel_channel_id=excluded.panel_channel_id,
       panel_message_id=excluded.panel_message_id,
+      panel_title=excluded.panel_title,
+      panel_description=excluded.panel_description,
       updated_at=CURRENT_TIMESTAMP
   `).run({
     guild_id: guildId,
@@ -286,7 +309,9 @@ function upsertSettings(guildId, patch) {
     customer_role_id: next.customer_role_id || null,
     log_channel_id: next.log_channel_id || null,
     panel_channel_id: next.panel_channel_id || null,
-    panel_message_id: next.panel_message_id || null
+    panel_message_id: next.panel_message_id || null,
+    panel_title: next.panel_title || null,
+    panel_description: next.panel_description || null
   });
 }
 
@@ -317,38 +342,39 @@ function publicBaseUrl() {
   return `http://localhost:${process.env.PORT || process.env.API_PORT || 3000}`;
 }
 
-async function callObfuscator(luaCode) {
-  const base = OBFUSCATOR_API_URL.replace(/\/$/, '');
-  const urls = [base, `${base}/obfuscate`, `${base}/api/obfuscate`];
-  let lastError = null;
+function kers0neLocalObfuscate(luaCode) {
+  const key = crypto.randomBytes(1)[0] || 173;
+  const bytes = Buffer.from(String(luaCode), 'utf8');
+  const encoded = Array.from(bytes, (byte, index) => byte ^ ((key + index * 17) & 255));
+  const chunks = [];
+  for (let i = 0; i < encoded.length; i += 32) chunks.push(encoded.slice(i, i + 32).join(','));
 
-  for (const url of urls) {
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: luaCode, script: luaCode, source: luaCode })
-      });
+  return `--[[
+\tProtected By Kers0ne Obfuscator
+]]
 
-      const text = await response.text();
-      if (!response.ok) {
-        lastError = new Error(`${url} returned ${response.status}: ${text.slice(0, 300)}`);
-        continue;
-      }
-
-      try {
-        const json = JSON.parse(text);
-        return json.obfuscated || json.code || json.result || json.output || json.data || text;
-      } catch {
-        return text;
-      }
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw lastError || new Error('Obfuscator API failed.');
+return(function(...)
+  local _k=${key}
+  local _b={${chunks.join(',')}}
+  local _c=string.char
+  local _t={}
+  for _i=1,#_b do
+    _t[_i]=_c(bit32.bxor(_b[_i], bit32.band(_k+(_i-1)*17,255)))
+  end
+  local _src=table.concat(_t)
+  local _fn=assert(loadstring(_src,"Kers0neObfuscated"))
+  return _fn(...)
+end)(...)
+`;
 }
+
+async function callObfuscator(luaCode) {
+  // Uses the Kers0ne-style local obfuscator. Your uploaded file was an example
+  // of protected output, not an API client, so this generates the same branded
+  // protected-wrapper format locally instead of sending two/API messages.
+  return kers0neLocalObfuscate(luaCode);
+}
+
 
 function verifyAdmin(member, settings) {
   if (!member) return false;
@@ -370,10 +396,17 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-function panelEmbed() {
+// Prevent duplicate replies if Discord/hosting sends the same interaction twice.
+const processedInteractions = new Set();
+
+function panelEmbed(guildId) {
+  const settings = guildId ? getSettings(guildId) : null;
+  const title = settings?.panel_title || 'Kolsec Hub';
+  const description = settings?.panel_description || 'Use the buttons below to manage your key';
+
   return new EmbedBuilder()
-    .setTitle('Kolsec Hub')
-    .setDescription('Use the buttons below to manage your key')
+    .setTitle(title)
+    .setDescription(description)
     .setColor(0x2f3136)
     .setFooter({ text: 'Kolsec | v1' });
 }
@@ -442,10 +475,14 @@ client.once('ready', () => {
 });
 
 client.on('interactionCreate', async interaction => {
+  if (processedInteractions.has(interaction.id)) return;
+  processedInteractions.add(interaction.id);
+  setTimeout(() => processedInteractions.delete(interaction.id), 60_000).unref?.();
+
   try {
-    if (interaction.isChatInputCommand()) await handleCommand(interaction);
-    if (interaction.isButton()) await handleButton(interaction);
-    if (interaction.isModalSubmit()) await handleModal(interaction);
+    if (interaction.isChatInputCommand()) return await handleCommand(interaction);
+    if (interaction.isButton()) return await handleButton(interaction);
+    if (interaction.isModalSubmit()) return await handleModal(interaction);
   } catch (error) {
     console.error(error);
     const payload = { content: 'Something went wrong. Check your bot console.', ephemeral: true };
@@ -498,18 +535,22 @@ async function handleCommand(interaction) {
     const customerRole = interaction.options.getRole('customer_role', true);
     const panelChannel = interaction.options.getChannel('panel_channel', true);
     const logChannel = interaction.options.getChannel('log_channel', false);
+    const panelTitle = interaction.options.getString('title') || 'Kolsec Hub';
+    const panelDescription = interaction.options.getString('description') || 'Use the buttons below to manage your key';
 
     upsertSettings(interaction.guildId, {
       admin_role_id: adminRole.id,
       customer_role_id: customerRole.id,
       log_channel_id: logChannel ? logChannel.id : null,
-      panel_channel_id: panelChannel.id
+      panel_channel_id: panelChannel.id,
+      panel_title: panelTitle,
+      panel_description: panelDescription
     });
 
-    const panelMessage = await panelChannel.send({ embeds: [panelEmbed()], components: panelButtons() });
+    const panelMessage = await panelChannel.send({ embeds: [panelEmbed(interaction.guildId)], components: panelButtons() });
     upsertSettings(interaction.guildId, { panel_message_id: panelMessage.id });
 
-    await interaction.reply({ ephemeral: true, content: `Setup complete. Panel posted in ${panelChannel}.` });
+    await interaction.reply({ ephemeral: true, content: `Setup complete. Panel posted in ${panelChannel}. Title: **${panelTitle}**` });
     await logGuild(interaction.guild, `⚙️ License panel setup by <@${interaction.user.id}>.`);
     return;
   }
@@ -521,7 +562,7 @@ async function handleCommand(interaction) {
     const settings = getSettings(interaction.guildId);
     const channel = interaction.options.getChannel('channel', false) || (settings?.panel_channel_id ? await interaction.guild.channels.fetch(settings.panel_channel_id).catch(() => null) : interaction.channel);
     if (!channel || !channel.isTextBased()) return interaction.reply({ ephemeral: true, content: 'Panel channel not found.' });
-    const panelMessage = await channel.send({ embeds: [panelEmbed()], components: panelButtons() });
+    const panelMessage = await channel.send({ embeds: [panelEmbed(interaction.guildId)], components: panelButtons() });
     upsertSettings(interaction.guildId, { panel_channel_id: channel.id, panel_message_id: panelMessage.id });
     await interaction.reply({ ephemeral: true, content: `Panel posted in ${channel}.` });
     return;
@@ -857,47 +898,90 @@ function kolsecHomePage() {
   const scriptCount = db.prepare('SELECT COUNT(*) AS count FROM scripts').get().count;
   const keyCount = db.prepare('SELECT COUNT(*) AS count FROM licenses').get().count;
   const hostedCount = db.prepare('SELECT COUNT(*) AS count FROM hosted_scripts').get().count;
-  const latestHosted = db.prepare('SELECT id, name, obfuscated, created_at FROM hosted_scripts ORDER BY created_at DESC LIMIT 3').all();
-
-  const buildCards = latestHosted.length
-    ? latestHosted.map((r, i) => `<a class="build" href="/script/${r.id}.lua"><span>v1.${String(80 - i).padStart(2, '0')}.00${i + 1}</span><strong>${escapeHtml(r.name)}</strong><small>${r.obfuscated ? 'Obfuscated build' : 'Hosted loader'} · ${escapeHtml(r.created_at)}</small></a>`).join('')
-    : `<a class="build" href="#start"><span>v1.00.001</span><strong>Kolsec deployment ready</strong><small>Use /apply or /hostscript to publish your first loader.</small></a>`;
 
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Kolsec — Lua Code Protection & Licensing</title>
-  <meta name="description" content="Kolsec protects, hosts, and monetizes Lua scripts with Discord licensing, HWID locking, and hosted loadstrings." />
+  <title>Kolsec - Lua Whitelist & Script Protection</title>
+  <meta name="description" content="Kolsec is a Discord-based Lua whitelist, script hosting, HWID, and obfuscation platform." />
   <style>
-    :root{--bg:#050505;--panel:#0b0b0b;--panel2:#111;--text:#fff;--muted:#a3a3a3;--line:#242424;--soft:#e9e9e9;--glow:rgba(255,255,255,.16)}
-    *{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Arial,sans-serif;overflow-x:hidden}
-    a{color:inherit;text-decoration:none}.wrap{width:min(1180px,92%);margin:auto}.noise{position:fixed;inset:0;pointer-events:none;opacity:.06;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.75' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E")}
-    .hex{position:absolute;inset:0;z-index:-1;overflow:hidden}.hex:before{content:'F3263F1D5207C3EA18603AA424DF13498E4B03CB03B1A1EE99CBE054AEAC57E9D922DAC67C79BB9E7A9D9E4B2B993801A8C9EE5002224412962603E1E8E69090805640F34AC34BA25534E50C79ECC0CE1145DBED6D36B725013FD184273BDD1B1FA7F1D11D03E7EB729E58DA2551683EDD1591B56FA9D31D6A31D536497F8ED858BBE63CC2EBA';position:absolute;top:26px;left:50%;transform:translateX(-50%);width:1100px;color:#fff;opacity:.08;font-family:ui-monospace,monospace;font-size:14px;line-height:1.8;word-break:break-all;text-align:center}.orb{position:absolute;width:520px;height:520px;left:50%;top:70px;transform:translateX(-50%);background:radial-gradient(circle,var(--glow),transparent 64%);filter:blur(20px);z-index:-2}
-    header{position:sticky;top:0;z-index:5;background:rgba(5,5,5,.68);backdrop-filter:blur(16px);border-bottom:1px solid rgba(255,255,255,.08)}.nav{height:78px;display:flex;align-items:center;justify-content:space-between}.brand{display:flex;align-items:center;gap:12px;font-size:23px;font-weight:950;letter-spacing:-.06em}.logo{width:38px;height:38px;border:1px solid #fff;border-radius:12px;display:grid;place-items:center;background:#fff;color:#000;box-shadow:0 0 40px rgba(255,255,255,.18)}.links{display:flex;gap:24px;color:var(--muted);font-size:14px}.links a:hover{color:#fff}.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;border:1px solid #fff;border-radius:999px;background:#fff;color:#000;padding:13px 19px;font-weight:850;box-shadow:0 0 40px rgba(255,255,255,.08)}.btn.ghost{background:#090909;color:#fff;border-color:#333;box-shadow:none}.btn:hover{transform:translateY(-1px)}
-    .hero{position:relative;padding:96px 0 84px;text-align:center}.eyebrow{display:inline-flex;align-items:center;gap:9px;border:1px solid #2d2d2d;border-radius:999px;padding:9px 14px;background:rgba(255,255,255,.04);color:#d9d9d9;font-size:14px}.hero h1{font-size:clamp(48px,9vw,108px);line-height:.86;margin:24px auto 24px;max-width:980px;letter-spacing:-.095em}.hero p{color:#bdbdbd;font-size:clamp(17px,2vw,22px);line-height:1.65;max-width:790px;margin:0 auto 32px}.actions{display:flex;justify-content:center;gap:14px;flex-wrap:wrap}.hero-card{margin:54px auto 0;max-width:860px;border:1px solid #262626;border-radius:28px;background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.025));padding:18px;box-shadow:0 35px 120px rgba(0,0,0,.5)}.terminal{border-radius:20px;background:#020202;border:1px solid #1d1d1d;text-align:left;overflow:hidden}.bar{display:flex;gap:7px;padding:14px 16px;border-bottom:1px solid #1b1b1b}.dot{width:10px;height:10px;border-radius:50%;background:#fff;opacity:.25}.terminal pre{margin:0;padding:22px;color:#e7e7e7;white-space:pre-wrap;font:14px/1.8 ui-monospace,monospace}.muted{color:#777}.cmd{color:#fff;font-weight:800}
-    .section{padding:74px 0}.split{display:grid;grid-template-columns:1fr auto;gap:24px;align-items:end;margin-bottom:28px}.kicker{color:#aaa;text-transform:uppercase;letter-spacing:.18em;font-size:12px;font-weight:800}.section h2{font-size:clamp(34px,5vw,62px);line-height:.95;letter-spacing:-.07em;margin:10px 0}.section .lead{color:#aaa;max-width:680px;line-height:1.65}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.feature{position:relative;min-height:230px;background:linear-gradient(180deg,#111,#080808);border:1px solid var(--line);border-radius:28px;padding:26px;overflow:hidden}.feature:after{content:'';position:absolute;right:-70px;top:-70px;width:170px;height:170px;background:radial-gradient(circle,rgba(255,255,255,.12),transparent 65%)}.icon{font-size:28px;margin-bottom:22px}.feature h3{font-size:22px;margin:0 0 10px}.feature p{color:#a7a7a7;line-height:1.65;margin:0}.mock{border:1px solid #252525;border-radius:26px;background:#0b0b0b;padding:18px}.mock-head{display:flex;justify-content:space-between;color:#777;border-bottom:1px solid #222;padding:0 0 14px}.mock-row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:15px 0;border-bottom:1px solid #181818}.tag{border:1px solid #333;border-radius:999px;padding:6px 10px;color:#ddd;background:#111;font-size:12px}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.stat{border:1px solid #252525;border-radius:28px;padding:30px;background:#0a0a0a;text-align:center}.num{font-size:52px;font-weight:950;letter-spacing:-.06em}.label{color:#999}.builds{display:grid;gap:14px}.build{display:block;border:1px solid #252525;border-radius:22px;padding:20px;background:#0a0a0a}.build span{font:12px ui-monospace,monospace;color:#888}.build strong{display:block;font-size:19px;margin:7px 0}.build small{color:#999;line-height:1.5}.pricing{display:grid;grid-template-columns:1fr 1fr;gap:18px}.price{border:1px solid #292929;border-radius:30px;padding:30px;background:#090909}.price.hot{background:#fff;color:#000}.price h3{font-size:28px;margin:0}.price .money{font-size:50px;font-weight:950;letter-spacing:-.07em;margin:18px 0}.price ul{list-style:none;padding:0;margin:20px 0;display:grid;gap:12px}.price li:before{content:'✓';margin-right:10px}.price.hot .btn{background:#000;color:#fff;border-color:#000}.cta{border:1px solid #2b2b2b;border-radius:34px;background:radial-gradient(circle at 50% 0,rgba(255,255,255,.13),transparent 34%),#080808;padding:56px;text-align:center}.cta h2{margin-top:0}.footer{border-top:1px solid #1f1f1f;padding:32px 0;color:#777;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
-    @media(max-width:860px){.links{display:none}.hero{text-align:left}.actions{justify-content:flex-start}.grid,.pricing,.stats{grid-template-columns:1fr}.split{grid-template-columns:1fr}.hero h1{letter-spacing:-.075em}.cta{padding:34px 22px}}
+    *{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;background:#000;color:#fff;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Arial,sans-serif} a{color:inherit;text-decoration:none}.wrap{width:min(1180px,92%);margin:auto}.bg{position:fixed;inset:0;z-index:-1;background:radial-gradient(circle at 50% -10%,rgba(255,255,255,.18),transparent 34%),radial-gradient(circle at 10% 20%,rgba(255,255,255,.08),transparent 26%),#000}.gridbg{position:fixed;inset:0;z-index:-1;opacity:.08;background-image:linear-gradient(#fff 1px,transparent 1px),linear-gradient(90deg,#fff 1px,transparent 1px);background-size:64px 64px;mask-image:linear-gradient(to bottom,#000,transparent 80%)}
+    header{position:sticky;top:0;z-index:10;background:rgba(0,0,0,.72);backdrop-filter:blur(18px);border-bottom:1px solid #1f1f1f}.nav{height:76px;display:flex;align-items:center;justify-content:space-between}.brand{font-size:26px;font-weight:950;letter-spacing:-.06em}.brand span{display:inline-grid;place-items:center;width:36px;height:36px;border-radius:12px;background:#fff;color:#000;margin-right:10px}.links{display:flex;gap:24px;color:#aaa;font-size:14px}.links a:hover{color:#fff}.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;padding:13px 19px;border-radius:999px;font-weight:850;border:1px solid #fff;background:#fff;color:#000}.btn.dark{background:#050505;color:#fff;border-color:#333}.btn:hover{transform:translateY(-1px)}
+    .hero{padding:96px 0 78px;text-align:center}.pill{display:inline-flex;gap:9px;align-items:center;padding:9px 14px;border:1px solid #333;border-radius:999px;background:#090909;color:#d7d7d7}.hero h1{font-size:clamp(48px,8vw,104px);line-height:.9;letter-spacing:-.09em;margin:22px auto;max-width:1020px}.hero p{font-size:clamp(17px,2vw,22px);line-height:1.6;color:#b8b8b8;max-width:820px;margin:0 auto 32px}.actions{display:flex;justify-content:center;gap:14px;flex-wrap:wrap}.preview{margin:58px auto 0;max-width:920px;border:1px solid #242424;border-radius:30px;background:linear-gradient(180deg,#111,#050505);box-shadow:0 30px 120px rgba(255,255,255,.07);padding:20px}.screen{border:1px solid #222;border-radius:22px;background:#080808;overflow:hidden;text-align:left}.top{display:flex;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #1f1f1f;color:#888}.rows{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:18px}.tile{border:1px solid #252525;background:#0d0d0d;border-radius:18px;padding:20px}.tile b{display:block;margin-bottom:8px}.tile small{color:#999;line-height:1.5}
+    .section{padding:76px 0}.title{max-width:780px}.kicker{color:#aaa;text-transform:uppercase;letter-spacing:.18em;font-size:12px;font-weight:900}.title h2{font-size:clamp(36px,5vw,66px);line-height:.95;letter-spacing:-.075em;margin:10px 0}.title p{color:#aaa;line-height:1.65}.features{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:30px}.card{border:1px solid #242424;border-radius:28px;background:linear-gradient(180deg,#101010,#070707);padding:28px;min-height:220px}.icon{font-size:30px;margin-bottom:18px}.card h3{font-size:22px;margin:0 0 10px}.card p{color:#aaa;line-height:1.65;margin:0}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.stat{border:1px solid #242424;border-radius:28px;background:#080808;text-align:center;padding:32px}.num{font-size:56px;font-weight:950;letter-spacing:-.07em}.label{color:#999}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.step{padding:26px;border-radius:28px;border:1px solid #242424;background:#0a0a0a}.step span{display:grid;place-items:center;width:38px;height:38px;border-radius:50%;background:#fff;color:#000;font-weight:950;margin-bottom:18px}.pricing{display:grid;grid-template-columns:1fr 1fr;gap:18px}.price{border:1px solid #252525;border-radius:30px;background:#080808;padding:30px}.price.hot{background:#fff;color:#000}.money{font-size:50px;font-weight:950;letter-spacing:-.07em;margin:12px 0}.price ul{list-style:none;padding:0;margin:20px 0;display:grid;gap:12px}.price li:before{content:'✓';margin-right:10px}.price.hot .btn{background:#000;color:#fff}.cta{text-align:center;border:1px solid #2b2b2b;border-radius:34px;background:radial-gradient(circle at 50% 0,rgba(255,255,255,.14),transparent 35%),#080808;padding:56px}.cmds{line-height:2.2}.cmds code{background:#111;border:1px solid #2a2a2a;border-radius:10px;padding:5px 8px;color:#fff}.footer{border-top:1px solid #1d1d1d;color:#777;padding:30px 0;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}@media(max-width:860px){.links{display:none}.hero{text-align:left}.actions{justify-content:flex-start}.features,.steps,.stats,.pricing,.rows{grid-template-columns:1fr}.cta{padding:34px 20px}}
   </style>
 </head>
 <body>
-  <div class="noise"></div>
-  <header><div class="wrap nav"><a class="brand" href="/"><span class="logo">K</span> Kolsec</a><nav class="links"><a href="#features">Features</a><a href="#builds">Builds</a><a href="#pricing">Pricing</a><a href="#start">Commands</a></nav><a class="btn ghost" href="#start">Enter the lab</a></div></header>
+  <div class="bg"></div><div class="gridbg"></div>
+  <header><div class="wrap nav"><a class="brand" href="/"><span>K</span>Kolsec</a><nav class="links"><a href="#features">Features</a><a href="#how">How it works</a><a href="#pricing">Pricing</a><a href="#commands">Commands</a></nav><a class="btn dark" href="/login">Get Started</a></div></header>
   <main>
-    <section class="hero"><div class="hex"></div><div class="orb"></div><div class="wrap"><span class="eyebrow">✦ The black and white standard for Lua security</span><h1>Protect. Monetize. Earn.</h1><p>Drop your project, get a protected hosted build, and monetize with confidence. Kolsec handles HWID-locks, whitelist keys, Discord panels, and loadstrings from one Render service.</p><div class="actions"><a class="btn" href="#start">Enter the lab</a><a class="btn ghost" href="#how">How it works</a></div><div class="hero-card"><div class="terminal"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div><pre><span class="muted">$</span> <span class="cmd">/apply</span> name:Project code:loader.lua obfuscate:true
-<span class="muted">Kolsec:</span> protected build created
-<span class="muted">Loadstring:</span> loadstring(game:HttpGet("${publicBaseUrl()}/script/host_xxxxx.lua"))()</pre></div></div></div></section>
-    <section id="features" class="section"><div class="wrap"><div class="split"><div><div class="kicker">Kolsec features</div><h2>Everything you need to ship and protect.</h2><p class="lead">An original Kolsec landing page with the same kind of product sections you wanted, but with fresh branding and styling.</p></div></div><div class="grid"><article class="feature"><div class="icon">🧩</div><h3>Custom Obfuscation</h3><p>Send code through your configured obfuscator API while applying or hosting scripts.</p></article><article class="feature"><div class="icon">🔐</div><h3>Whitelist System</h3><p>Generate keys, redeem from the panel, assign buyer roles, revoke access, and reset HWIDs.</p></article><article class="feature"><div class="icon">🤖</div><h3>Discord Bot</h3><p>Clean slash commands: /setup, /generatekey, /apply, /hostscript, and /resethwid.</p></article><article class="feature"><div class="icon">📊</div><h3>Dashboard Feel</h3><p>Live website stats show products, generated keys, and hosted scripts from the database.</p></article><article class="feature"><div class="icon">🖥️</div><h3>HWID Tracker</h3><p>Bind keys to the first device that verifies and reset them from Discord when needed.</p></article><article class="feature"><div class="icon">⚡</div><h3>Hosted Loadstrings</h3><p>Render serves your Lua at /script/&lt;id&gt;.lua with a ready-to-copy loadstring endpoint.</p></article></div></div></section>
-    <section id="how" class="section"><div class="wrap"><div class="split"><div><div class="kicker">Create a script in seconds</div><h2>Ship straight from Discord.</h2><p class="lead">Run /apply, save the API secret, generate keys, then let customers use the panel.</p></div><div class="mock"><div class="mock-head"><span>Kolsec Panel</span><span>online</span></div><div class="mock-row"><strong>📜 View Script</strong><span class="tag">loadstring</span></div><div class="mock-row"><strong>🔑 Redeem Key</strong><span class="tag">whitelist</span></div><div class="mock-row"><strong>⚙️ Reset HWID</strong><span class="tag">support</span></div></div></div><div class="stats"><div class="stat"><div class="num">${scriptCount}</div><div class="label">products created</div></div><div class="stat"><div class="num">${keyCount}</div><div class="label">keys generated</div></div><div class="stat"><div class="num">${hostedCount}</div><div class="label">scripts hosted</div></div></div></div></section>
-    <section id="builds" class="section"><div class="wrap"><div class="kicker">Kolsec latest builds</div><h2>Shipping every week.</h2><p class="lead">Recent hosted scripts and deployment status appear here.</p><div class="builds">${buildCards}</div></div></section>
-    <section id="pricing" class="section"><div class="wrap"><div class="kicker">Kolsec pricing</div><h2>Simple plans. Real protection.</h2><div class="pricing"><div class="price"><h3>Citizen</h3><div class="money">$0<span style="font-size:18px;color:#888">/forever</span></div><ul><li>Discord bot panel</li><li>Whitelist keys</li><li>Hosted loadstrings</li><li>HWID resets</li><li>Basic protection flow</li></ul><a class="btn ghost" href="#start">Get Started Free</a></div><div class="price hot"><h3>Royal</h3><div class="money">$3<span style="font-size:18px;color:#555">/month</span></div><ul><li>Unlimited hosted scripts</li><li>Obfuscation pipeline</li><li>Priority support</li><li>Buyer role automation</li><li>Early access features</li></ul><a class="btn" href="#start">Upgrade to Royal</a></div></div></div></section>
-    <section id="start" class="section"><div class="wrap"><div class="cta"><h2>Ready to take back control?</h2><p class="lead" style="margin:0 auto 24px">Use these commands in Discord after the bot starts on Render.</p><p><code>/help</code> <code>/status</code> <code>/setup</code> <code>/panel</code> <code>/apply</code> <code>/createscript</code> <code>/scripts</code> <code>/generatekey</code> <code>/genkey</code> <code>/redeem</code> <code>/keyinfo</code> <code>/mykeys</code> <code>/freekey</code> <code>/getrole</code> <code>/viewscript</code> <code>/resethwid</code> <code>/reset-hwid</code> <code>/revoke</code> <code>/extendkey</code> <code>/deletekey</code> <code>/hostscript</code> <code>/obfuscate</code> <code>/loader</code></p><div class="actions"><a class="btn" href="/health">Check Status</a><a class="btn ghost" href="/hosted">View Hosted Scripts</a></div></div></div></section>
+    <section class="hero"><div class="wrap"><div class="pill">Discord OAuth enabled · Lua protection</div><h1>Lua Whitelist & Script Protection</h1><p>Kolsec helps you protect Lua scripts, generate whitelist keys, reset HWIDs, host loadstrings, and manage access straight from Discord.</p><div class="actions"><a class="btn" href="/login">Get Started with Discord</a><a class="btn dark" href="#how">How it works</a></div><div class="preview"><div class="screen"><div class="top"><b>Kolsec Dashboard</b><span>online</span></div><div class="rows"><div class="tile"><b>${scriptCount}</b><small>Scripts created</small></div><div class="tile"><b>${keyCount}</b><small>License keys</small></div><div class="tile"><b>${hostedCount}</b><small>Hosted loadstrings</small></div></div></div></div></div></section>
+    <section id="features" class="section"><div class="wrap"><div class="title"><div class="kicker">Powerful features</div><h2>Everything you need to manage your scripts automatically.</h2><p>Built for Discord communities that sell or distribute Lua scripts.</p></div><div class="features"><div class="card"><div class="icon">🔐</div><h3>Whitelist Keys</h3><p>Generate expiring or lifetime keys and let users redeem from your panel.</p></div><div class="card"><div class="icon">🖥️</div><h3>HWID Locking</h3><p>Bind each key to the first device and reset it when support is needed.</p></div><div class="card"><div class="icon">⚡</div><h3>Hosted Loadstrings</h3><p>Host scripts on Render and serve clean loadstrings at /script/id.lua.</p></div><div class="card"><div class="icon">🤖</div><h3>Discord Bot</h3><p>Panels, buttons, logs, buyer roles, key info, and admin commands.</p></div><div class="card"><div class="icon">🧩</div><h3>Obfuscation</h3><p>Use the local Kers0ne-style wrapper when applying or hosting Lua.</p></div><div class="card"><div class="icon">📡</div><h3>REST API</h3><p>Verify keys from loaders using a protected verification endpoint.</p></div></div></div></section>
+    <section id="how" class="section"><div class="wrap"><div class="title"><div class="kicker">How it works</div><h2>Set up once. Sell forever.</h2></div><div class="steps"><div class="step"><span>1</span><h3>Run /setup</h3><p>Post the Kolsec panel and configure roles/logs.</p></div><div class="step"><span>2</span><h3>Run /apply</h3><p>Create a script, host the loader, and save the API secret.</p></div><div class="step"><span>3</span><h3>Generate keys</h3><p>Users redeem keys and your loader verifies access.</p></div></div></div></section>
+    <section class="section"><div class="wrap"><div class="stats"><div class="stat"><div class="num">${scriptCount}</div><div class="label">scripts</div></div><div class="stat"><div class="num">${keyCount}</div><div class="label">keys</div></div><div class="stat"><div class="num">${hostedCount}</div><div class="label">hosted scripts</div></div></div></div></section>
+    <section id="pricing" class="section"><div class="wrap"><div class="title"><div class="kicker">Pricing</div><h2>Simple plans. Real protection.</h2></div><div class="pricing"><div class="price"><h3>Citizen</h3><div class="money">$0</div><ul><li>Discord panel</li><li>Key generation</li><li>HWID resets</li><li>Hosted loadstrings</li></ul><a class="btn dark" href="/login">Get Started</a></div><div class="price hot"><h3>Royal</h3><div class="money">$3<span style="font-size:18px">/mo</span></div><ul><li>Unlimited hosting</li><li>Obfuscation workflow</li><li>Priority support</li><li>Advanced automation</li></ul><a class="btn" href="/login">Upgrade</a></div></div></div></section>
+    <section id="commands" class="section"><div class="wrap"><div class="cta"><h2>Ready to protect your scripts?</h2><p>Sign in with Discord to start.</p><div class="actions"><a class="btn" href="/login">Get Started</a><a class="btn dark" href="/health">Status</a></div><p class="cmds"><code>/setup</code> <code>/apply</code> <code>/generatekey</code> <code>/hostscript</code> <code>/resethwid</code> <code>/redeem</code> <code>/keyinfo</code></p></div></div></section>
   </main>
-  <div class="wrap footer"><span>Kolsec © ${new Date().getFullYear()}</span><span>Lua Code Protection & Licensing</span></div>
+  <div class="wrap footer"><span>Kolsec © ${new Date().getFullYear()}</span><span>Lua Whitelist & Script Protection</span></div>
 </body>
 </html>`;
 }
+
+function discordDashboardPage(user) {
+  const username = escapeHtml(user.global_name || user.username || 'Discord User');
+  const avatar = user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=128` : '';
+  const scripts = db.prepare('SELECT id, name, obfuscated, created_at FROM hosted_scripts WHERE created_by = ? ORDER BY created_at DESC').all(user.id);
+  const remaining = Math.max(0, MAX_WEB_SCRIPTS_PER_USER - scripts.length);
+  const scriptRows = scripts.length
+    ? scripts.map(s => `<div class="script"><div><b>${escapeHtml(s.name)}</b><small>${s.obfuscated ? 'Obfuscated' : 'Plain'} · ${escapeHtml(s.created_at)}</small><code>loadstring(game:HttpGet("${publicBaseUrl()}/script/${s.id}.lua"))()</code></div><form method="post" action="/dashboard/scripts/${s.id}/delete"><button>Delete</button></form></div>`).join('')
+    : `<p class="muted">No scripts yet. Create your first hosted loadstring below.</p>`;
+
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kolsec Dashboard</title><style>*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font-family:Inter,Arial,sans-serif}a{color:inherit}.wrap{width:min(1120px,92%);margin:38px auto}.nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.card{border:1px solid #242424;border-radius:28px;background:#080808;padding:26px;margin-bottom:18px}.profile{display:flex;align-items:center;gap:16px}.avatar{width:70px;height:70px;border-radius:50%;border:1px solid #333}.muted,small{color:#999}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.stat{border:1px solid #242424;border-radius:22px;background:#050505;padding:20px}.num{font-size:38px;font-weight:950}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.script{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:start;border:1px solid #222;border-radius:18px;padding:16px;margin:12px 0;background:#050505}.script b,.script small,.script code{display:block}.script code{white-space:pre-wrap;word-break:break-all;background:#111;border:1px solid #2a2a2a;border-radius:12px;padding:10px;margin-top:10px;color:#eee}input,textarea{width:100%;background:#050505;color:#fff;border:1px solid #2a2a2a;border-radius:14px;padding:12px;margin:8px 0 14px;font:inherit}textarea{min-height:180px}button,.btn{display:inline-flex;border:1px solid #fff;border-radius:999px;background:#fff;color:#000;padding:11px 16px;font-weight:850;text-decoration:none;cursor:pointer}.btn.dark,button.dark{background:#000;color:#fff;border-color:#333}.check{display:flex;gap:10px;align-items:center;margin-bottom:14px}.check input{width:auto;margin:0}@media(max-width:800px){.grid,.stats,.script{grid-template-columns:1fr}}</style></head><body><div class="wrap"><div class="nav"><h1>Kolsec Dashboard</h1><div><a class="btn dark" href="${DISCORD_INVITE_URL}">Connect Discord</a> <a class="btn dark" href="/logout">Logout</a></div></div><div class="card profile">${avatar ? `<img class="avatar" src="${avatar}" alt="avatar">` : ''}<div><h2>Welcome, ${username}</h2><p class="muted">Discord connected. You can host up to <b>${MAX_WEB_SCRIPTS_PER_USER}</b> scripts.</p></div></div><div class="stats"><div class="stat"><div class="num">${scripts.length}</div><div class="muted">Scripts used</div></div><div class="stat"><div class="num">${remaining}</div><div class="muted">Slots left</div></div><div class="stat"><div class="num">1000</div><div class="muted">Max scripts</div></div></div><div class="grid"><div class="card"><h2>Create Script</h2><form method="post" action="/dashboard/scripts"><label>Name</label><input name="name" maxlength="80" placeholder="My Loader" required><label>Lua Code</label><textarea name="code" maxlength="4000" placeholder='print("Kolsec")' required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate with Kers0ne-style wrapper</label><button type="submit">Host Script</button></form></div><div class="card"><h2>Your Scripts</h2>${scriptRows}</div></div><div class="card"><h2>Discord Commands</h2><p><code>/setup</code> <code>/apply</code> <code>/generatekey</code> <code>/hostscript</code> <code>/resethwid</code></p><a class="btn" href="/">Back Home</a></div></div></body></html>`;
+}
+
+function makeSession(user) {
+  const payload = {
+    id: user.id,
+    username: user.username,
+    global_name: user.global_name,
+    avatar: user.avatar,
+    exp: Date.now() + 7 * 24 * 60 * 60 * 1000
+  };
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(body).digest('base64url');
+  return `${body}.${sig}`;
+}
+
+function readCookies(req) {
+  return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map(v => {
+    const i = v.indexOf('=');
+    return [decodeURIComponent(v.slice(0, i).trim()), decodeURIComponent(v.slice(i + 1).trim())];
+  }));
+}
+
+function getSessionUser(req) {
+  const token = readCookies(req).kolsec_session;
+  if (!token || !token.includes('.')) return null;
+  const [body, sig] = token.split('.');
+  const expected = crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(body).digest('base64url');
+  if (Buffer.byteLength(sig) !== Buffer.byteLength(expected)) return null;
+  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+  const user = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+  if (!user.exp || user.exp < Date.now()) return null;
+  return user;
+}
+
+function requireDashboardUser(req, res) {
+  const user = getSessionUser(req);
+  if (!user) {
+    res.redirect('/login');
+    return null;
+  }
+  return user;
+}
+
 
 function escapeHtml(value) {
   return String(value)
@@ -913,9 +997,122 @@ function escapeHtml(value) {
 function startApiServer() {
   const app = express();
   app.use(express.json({ limit: '64kb' }));
+  app.use(express.urlencoded({ extended: true, limit: '256kb' }));
 
   app.get('/', (req, res) => res.type('html').send(kolsecHomePage()));
   app.get('/health', (req, res) => res.json({ ok: true, name: 'Kolsec' }));
+
+  app.get('/login', (req, res) => {
+    const state = crypto.randomBytes(18).toString('hex');
+    oauthStates.set(state, Date.now());
+    for (const [oldState, createdAt] of oauthStates) {
+      if (Date.now() - createdAt > 10 * 60 * 1000) oauthStates.delete(oldState);
+    }
+
+    const redirectUri = `${publicBaseUrl()}/auth/discord/callback`;
+    const params = new URLSearchParams({
+      client_id: OAUTH_CLIENT_ID,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: 'identify guilds',
+      state
+    });
+
+    return res.redirect(`https://discord.com/oauth2/authorize?${params.toString()}`);
+  });
+
+  app.get('/auth/discord/callback', async (req, res) => {
+    try {
+      const { code, state } = req.query;
+      if (!code || !state || !oauthStates.has(state)) {
+        return res.status(400).type('html').send('<h1>Invalid OAuth state</h1><p>Please go back and try signing in again.</p>');
+      }
+      oauthStates.delete(state);
+
+      if (!DISCORD_CLIENT_SECRET) {
+        return res.status(500).type('html').send('<h1>OAuth not configured</h1><p>Add DISCORD_CLIENT_SECRET in Render environment variables, then redeploy.</p>');
+      }
+
+      const redirectUri = `${publicBaseUrl()}/auth/discord/callback`;
+      const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: OAUTH_CLIENT_ID,
+          client_secret: DISCORD_CLIENT_SECRET,
+          grant_type: 'authorization_code',
+          code: String(code),
+          redirect_uri: redirectUri
+        })
+      });
+
+      const tokenData = await tokenResponse.json().catch(() => ({}));
+      if (!tokenResponse.ok) {
+        return res.status(500).type('html').send(`<h1>Discord OAuth failed</h1><pre>${escapeHtml(JSON.stringify(tokenData, null, 2))}</pre>`);
+      }
+
+      const userResponse = await fetch('https://discord.com/api/users/@me', {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` }
+      });
+      const user = await userResponse.json();
+      if (!userResponse.ok) {
+        return res.status(500).type('html').send('<h1>Could not fetch Discord user</h1>');
+      }
+
+      const secure = publicBaseUrl().startsWith('https://') ? '; Secure' : '';
+      res.setHeader('Set-Cookie', `kolsec_session=${encodeURIComponent(makeSession(user))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800${secure}`);
+      return res.redirect('/dashboard');
+    } catch (error) {
+      console.error('OAuth callback error:', error);
+      return res.status(500).type('html').send(`<h1>OAuth error</h1><pre>${escapeHtml(error.message)}</pre>`);
+    }
+  });
+
+  app.get('/dashboard', (req, res) => {
+    const user = requireDashboardUser(req, res);
+    if (!user) return;
+    return res.type('html').send(discordDashboardPage(user));
+  });
+
+  app.post('/dashboard/scripts', async (req, res) => {
+    const user = requireDashboardUser(req, res);
+    if (!user) return;
+
+    const count = db.prepare('SELECT COUNT(*) AS count FROM hosted_scripts WHERE created_by = ?').get(user.id).count;
+    if (count >= MAX_WEB_SCRIPTS_PER_USER) {
+      return res.status(403).type('html').send(`<h1>Script limit reached</h1><p>You already have ${MAX_WEB_SCRIPTS_PER_USER} scripts.</p><a href="/dashboard">Back</a>`);
+    }
+
+    const name = String(req.body.name || '').trim().slice(0, 80);
+    const code = String(req.body.code || '').slice(0, 4000);
+    const shouldObfuscate = req.body.obfuscate === 'true' || req.body.obfuscate === 'on';
+    if (!name || !code) return res.status(400).type('html').send('<h1>Missing name or code</h1><a href="/dashboard">Back</a>');
+
+    let finalCode = code;
+    if (shouldObfuscate) finalCode = await callObfuscator(code);
+
+    createHostedScript({
+      guildId: 'web',
+      name,
+      code: String(finalCode),
+      obfuscated: shouldObfuscate,
+      createdBy: user.id
+    });
+
+    return res.redirect('/dashboard');
+  });
+
+  app.post('/dashboard/scripts/:id/delete', (req, res) => {
+    const user = requireDashboardUser(req, res);
+    if (!user) return;
+    db.prepare('DELETE FROM hosted_scripts WHERE id = ? AND created_by = ?').run(req.params.id, user.id);
+    return res.redirect('/dashboard');
+  });
+
+  app.get('/logout', (req, res) => {
+    res.setHeader('Set-Cookie', 'kolsec_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
+    return res.redirect('/');
+  });
 
   app.get('/script/:id.lua', (req, res) => {
     const script = db.prepare('SELECT * FROM hosted_scripts WHERE id = ?').get(req.params.id);
