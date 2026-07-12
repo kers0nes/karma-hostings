@@ -1,570 +1,456 @@
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionsBitField, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
-const sqlite3 = require('sqlite3').verbose();
-const crypto = require('crypto');
 require('dotenv').config();
+
+const express = require('express');
+const {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  Client,
+  EmbedBuilder,
+  GatewayIntentBits,
+  ModalBuilder,
+  Partials,
+  TextInputBuilder,
+  TextInputStyle
+} = require('discord.js');
+
+const {
+  db,
+  addDays,
+  createScript,
+  getSettings,
+  hashSecret,
+  isExpired,
+  makeKey,
+  upsertSettings,
+  verifyAdmin
+} = require('./db');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 
-// ---------- DATABASE ----------
-const db = new sqlite3.Database('bot_data.db');
+if (!TOKEN) {
+  console.error('Missing DISCORD_TOKEN in .env');
+  process.exit(1);
+}
 
-db.serialize(() => {
-    db.run(`CREATE TABLE IF NOT EXISTS panels (
-        guild_id TEXT PRIMARY KEY,
-        channel_id TEXT,
-        message_id TEXT,
-        title TEXT,
-        description TEXT,
-        script_content TEXT
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS hosted_scripts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        guild_id TEXT,
-        script_name TEXT,
-        script_content TEXT,
-        created_by TEXT,
-        created_at TEXT,
-        views INTEGER DEFAULT 0
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS whitelist (
-        guild_id TEXT,
-        user_id TEXT,
-        expires_at TEXT,
-        PRIMARY KEY (guild_id, user_id)
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS keys (
-        key_code TEXT PRIMARY KEY,
-        guild_id TEXT,
-        created_by TEXT,
-        created_at TEXT,
-        expires_at TEXT,
-        used_by TEXT,
-        used_at TEXT,
-        status TEXT DEFAULT 'active'
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS tickets (
-        ticket_id TEXT PRIMARY KEY,
-        guild_id TEXT,
-        user_id TEXT,
-        channel_id TEXT,
-        created_at TEXT,
-        status TEXT DEFAULT 'open'
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS mutes (
-        guild_id TEXT,
-        user_id TEXT,
-        expires_at TEXT,
-        PRIMARY KEY (guild_id, user_id)
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS support_config (
-        guild_id TEXT PRIMARY KEY,
-        category_id TEXT,
-        support_role_id TEXT
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS panel_roles (
-        guild_id TEXT,
-        role_id TEXT,
-        PRIMARY KEY (guild_id, role_id)
-    )`);
-});
-
-// ---------- BOT ----------
 const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers
-    ]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  partials: [Partials.Channel]
 });
 
-const rest = new REST({ version: '10' }).setToken(TOKEN);
-
-// ---------- HELPERS ----------
-function isAdmin(interaction) {
-    return interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
+function panelEmbed() {
+  return new EmbedBuilder()
+    .setTitle('🔐 License Panel')
+    .setDescription('Use the buttons below to manage your script access.')
+    .addFields(
+      { name: '✅ Redeem Key', value: 'Claim a license key and get the customer role.' },
+      { name: '🖥️ Reset HWID', value: 'Clear the device lock on your redeemed key.' },
+      { name: '🔑 My Keys', value: 'View your redeemed licenses.' }
+    )
+    .setColor(0x5865f2)
+    .setFooter({ text: 'Polsec-like license system' });
 }
 
-function generateKey(length = 16) {
-    return crypto.randomBytes(length).toString('hex').toUpperCase();
+function panelButtons() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('panel_redeem').setLabel('Redeem Key').setEmoji('✅').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('panel_reset_hwid').setLabel('Reset HWID').setEmoji('🖥️').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('panel_mykeys').setLabel('My Keys').setEmoji('🔑').setStyle(ButtonStyle.Secondary)
+  );
 }
 
-// ---------- COMMANDS ----------
-const commands = [
-    new SlashCommandBuilder()
-        .setName('panel')
-        .setDescription('Create a Source Panel in the current channel')
-        .addStringOption(opt => opt.setName('title').setDescription('Panel title').setRequired(true))
-        .addStringOption(opt => opt.setName('description').setDescription('Panel description').setRequired(true)),
+async function logGuild(guild, text) {
+  const settings = getSettings(guild.id);
+  if (!settings || !settings.log_channel_id) return;
 
-    new SlashCommandBuilder()
-        .setName('hostscript')
-        .setDescription('Host a script for users to view')
-        .addStringOption(opt => opt.setName('name').setDescription('Script name').setRequired(true))
-        .addStringOption(opt => opt.setName('script').setDescription('Script content (loadstring)').setRequired(true)),
-
-    new SlashCommandBuilder()
-        .setName('generatekey')
-        .setDescription('Generate a key for a user')
-        .addUserOption(opt => opt.setName('user').setDescription('User to generate key for').setRequired(true))
-        .addIntegerOption(opt => opt.setName('days').setDescription('Days until expiry'))
-        .addBooleanOption(opt => opt.setName('lifetime').setDescription('Lifetime key')),
-
-    new SlashCommandBuilder()
-        .setName('whitelist')
-        .setDescription('Whitelist a user')
-        .addUserOption(opt => opt.setName('user').setDescription('User to whitelist').setRequired(true))
-        .addIntegerOption(opt => opt.setName('days').setDescription('Days to whitelist').setRequired(true)),
-
-    new SlashCommandBuilder()
-        .setName('resethwid')
-        .setDescription('Reset HWID for a user')
-        .addUserOption(opt => opt.setName('user').setDescription('User to reset').setRequired(true)),
-
-    new SlashCommandBuilder()
-        .setName('setup-tickets')
-        .setDescription('Setup support ticket system')
-        .addRoleOption(opt => opt.setName('support_role').setDescription('Support role').setRequired(true)),
-
-    new SlashCommandBuilder()
-        .setName('mute')
-        .setDescription('Timeout a user and delete their tickets')
-        .addUserOption(opt => opt.setName('user').setDescription('User to mute').setRequired(true))
-        .addIntegerOption(opt => opt.setName('minutes').setDescription('Minutes to mute').setRequired(true)),
-
-    new SlashCommandBuilder()
-        .setName('setpanelrole')
-        .setDescription('Set the role users get when they redeem a key')
-        .addRoleOption(opt => opt.setName('role').setDescription('Role to give').setRequired(true)),
-];
-
-// ---------- REGISTER COMMANDS ----------
-async function registerCommands() {
-    try {
-        await rest.put(Routes.applicationCommands(client.user.id), { body: commands.map(cmd => cmd.toJSON()) });
-        console.log('✅ Commands registered!');
-    } catch (err) {
-        console.error('❌ Failed to register commands:', err);
-    }
+  const channel = await guild.channels.fetch(settings.log_channel_id).catch(() => null);
+  if (channel && channel.isTextBased()) {
+    await channel.send(text).catch(() => null);
+  }
 }
 
-// ---------- EVENT: READY ----------
-client.once('ready', async () => {
-    console.log(`✅ Logged in as ${client.user.tag}`);
-    await registerCommands();
+function requireAdmin(interaction) {
+  const settings = getSettings(interaction.guildId);
+  return verifyAdmin(interaction.member, settings);
+}
+
+function keyStatus(license) {
+  if (!license) return 'Missing';
+  if (license.revoked) return 'Revoked';
+  if (isExpired(license.expires_at)) return 'Expired';
+  if (license.discord_user_id) return 'Redeemed';
+  return 'Unused';
+}
+
+async function redeemKey({ guild, member, userId, key }) {
+  const license = db.prepare('SELECT * FROM licenses WHERE license_key = ? AND guild_id = ?').get(key, guild.id);
+
+  if (!license) return { ok: false, message: 'That key does not exist in this server.' };
+  if (license.revoked) return { ok: false, message: 'That key has been revoked.' };
+  if (isExpired(license.expires_at)) return { ok: false, message: 'That key is expired.' };
+  if (license.discord_user_id && license.discord_user_id !== userId) {
+    return { ok: false, message: 'That key was already redeemed by someone else.' };
+  }
+
+  db.prepare('UPDATE licenses SET discord_user_id = ?, redeemed_at = COALESCE(redeemed_at, CURRENT_TIMESTAMP) WHERE license_key = ?')
+    .run(userId, key);
+
+  const settings = getSettings(guild.id);
+  if (settings && settings.customer_role_id && member) {
+    await member.roles.add(settings.customer_role_id).catch(() => null);
+  }
+
+  await logGuild(guild, `✅ <@${userId}> redeemed key \`${key}\`.`);
+  return { ok: true, message: 'Key redeemed successfully.' };
+}
+
+async function resetHwid({ guild, userId, key, admin }) {
+  const license = db.prepare('SELECT * FROM licenses WHERE license_key = ? AND guild_id = ?').get(key, guild.id);
+
+  if (!license) return { ok: false, message: 'That key does not exist in this server.' };
+  if (!admin && license.discord_user_id !== userId) {
+    return { ok: false, message: 'You can only reset HWID for your own redeemed key.' };
+  }
+
+  db.prepare('UPDATE licenses SET hwid = NULL WHERE license_key = ?').run(key);
+  await logGuild(guild, `🖥️ HWID reset for key \`${key}\` by <@${userId}>.`);
+
+  return { ok: true, message: 'HWID reset successfully.' };
+}
+
+client.once('ready', () => {
+  console.log(`Logged in as ${client.user.tag}`);
+  startApiServer();
 });
 
-// ---------- EVENT: INTERACTION ----------
-client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isCommand()) return;
+client.on('interactionCreate', async interaction => {
+  try {
+    if (interaction.isChatInputCommand()) await handleCommand(interaction);
+    if (interaction.isButton()) await handleButton(interaction);
+    if (interaction.isModalSubmit()) await handleModal(interaction);
+  } catch (error) {
+    console.error(error);
+    const payload = { content: 'Something went wrong. Check your bot console.', ephemeral: true };
 
-    const { commandName } = interaction;
-
-    // ---------- /panel ----------
-    if (commandName === 'panel') {
-        if (!isAdmin(interaction)) {
-            return interaction.reply({ content: '❌ You need Administrator permission.', ephemeral: true });
-        }
-
-        const title = interaction.options.getString('title');
-        const description = interaction.options.getString('description');
-
-        // Get the role configured for this server
-        db.get(`SELECT role_id FROM panel_roles WHERE guild_id = ?`, [interaction.guildId], async (err, roleRow) => {
-            const roleMention = roleRow ? `<@&${roleRow.role_id}>` : '@Source Access';
-
-            // Create the Source Panel embed like in your image
-            const embed = new EmbedBuilder()
-                .setTitle(`# ${title}`)
-                .setColor(0x2B2D31)
-                .setDescription(
-                    `${description}\n\n` +
-                    `**How to Redeem**\n` +
-                    `1. Click **Redeem Key**\n` +
-                    `2. Paste your key and confirm\n` +
-                    `3. Claim your ${roleMention} role\n\n` +
-                    `Need help? Create a ticket.`
-                )
-                .setFooter({ text: `${interaction.guild.name} | ${interaction.user.username}` });
-
-            const row = new ActionRowBuilder()
-                .addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('redeem_key')
-                        .setLabel('🔑 Redeem Key')
-                        .setStyle(ButtonStyle.Success)
-                );
-
-            const msg = await interaction.channel.send({ 
-                embeds: [embed], 
-                components: [row] 
-            });
-
-            db.run(`INSERT OR REPLACE INTO panels (guild_id, channel_id, message_id, title, description)
-                    VALUES (?, ?, ?, ?, ?)`,
-                [interaction.guildId, interaction.channelId, msg.id, title, description]);
-
-            await interaction.reply({ content: '✅ Source Panel created successfully!', ephemeral: true });
-        });
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp(payload).catch(() => null);
+    } else {
+      await interaction.reply(payload).catch(() => null);
     }
-
-    // ---------- /setpanelrole ----------
-    if (commandName === 'setpanelrole') {
-        if (!isAdmin(interaction)) {
-            return interaction.reply({ content: '❌ You need Administrator permission.', ephemeral: true });
-        }
-
-        const role = interaction.options.getRole('role');
-
-        db.run(`INSERT OR REPLACE INTO panel_roles (guild_id, role_id) VALUES (?, ?)`,
-            [interaction.guildId, role.id]);
-
-        await interaction.reply({ 
-            content: `✅ Panel role set to ${role}! Users will get this role when they redeem a key.`, 
-            ephemeral: true 
-        });
-    }
-
-    // ---------- /hostscript ----------
-    if (commandName === 'hostscript') {
-        if (!isAdmin(interaction)) {
-            return interaction.reply({ content: '❌ You need Administrator permission.', ephemeral: true });
-        }
-
-        const name = interaction.options.getString('name');
-        const script = interaction.options.getString('script');
-
-        db.run(`INSERT INTO hosted_scripts (guild_id, script_name, script_content, created_by, created_at)
-                VALUES (?, ?, ?, ?, ?)`,
-            [interaction.guildId, name, script, interaction.user.id, new Date().toISOString()]);
-
-        const embed = new EmbedBuilder()
-            .setTitle(`📜 ${name}`)
-            .setDescription('Click the button below to copy the script')
-            .setColor(0x00FF00)
-            .addFields({ 
-                name: '📋 Script', 
-                value: `\`\`\`lua\n${script.substring(0, 500)}${script.length > 500 ? '...' : ''}\n\`\`\``,
-                inline: false 
-            })
-            .setFooter({ text: `Hosted by ${interaction.user.username}` });
-
-        const row = new ActionRowBuilder()
-            .addComponents(
-                new ButtonBuilder()
-                    .setCustomId(`copy_script_${Date.now()}`)
-                    .setLabel('📋 Tap to Copy')
-                    .setStyle(ButtonStyle.Secondary)
-            );
-
-        await interaction.channel.send({ embeds: [embed], components: [row] });
-        await interaction.reply({ content: `✅ Script "${name}" hosted successfully!`, ephemeral: true });
-    }
-
-    // ---------- /generatekey ----------
-    if (commandName === 'generatekey') {
-        if (!isAdmin(interaction)) {
-            return interaction.reply({ content: '❌ You need Administrator permission.', ephemeral: true });
-        }
-
-        const user = interaction.options.getUser('user');
-        const days = interaction.options.getInteger('days') || 30;
-        const lifetime = interaction.options.getBoolean('lifetime') || false;
-
-        const key = generateKey();
-        const expires = new Date();
-        if (!lifetime) expires.setDate(expires.getDate() + days);
-
-        db.run(`INSERT INTO keys (key_code, guild_id, created_by, created_at, expires_at, status)
-                VALUES (?, ?, ?, ?, ?, ?)`,
-            [key, interaction.guildId, interaction.user.id, new Date().toISOString(), 
-             lifetime ? null : expires.toISOString(), 'active']);
-
-        const embed = new EmbedBuilder()
-            .setTitle('🔑 Key Generated')
-            .setColor(0x00FF00)
-            .addFields(
-                { name: 'User', value: user.toString(), inline: true },
-                { name: 'Key', value: `\`${key}\``, inline: true },
-                { name: 'Expires', value: lifetime ? 'Never (Lifetime)' : expires.toLocaleDateString(), inline: true }
-            );
-
-        try {
-            await user.send({ embeds: [embed] });
-            await interaction.reply({ content: `✅ Key sent to ${user}!`, ephemeral: true });
-        } catch {
-            await interaction.reply({ embeds: [embed] });
-        }
-    }
-
-    // ---------- /whitelist ----------
-    if (commandName === 'whitelist') {
-        if (!isAdmin(interaction)) {
-            return interaction.reply({ content: '❌ You need Administrator permission.', ephemeral: true });
-        }
-
-        const user = interaction.options.getUser('user');
-        const days = interaction.options.getInteger('days');
-        const expires = new Date();
-        expires.setDate(expires.getDate() + days);
-
-        db.run(`INSERT OR REPLACE INTO whitelist (guild_id, user_id, expires_at)
-                VALUES (?, ?, ?)`,
-            [interaction.guildId, user.id, expires.toISOString()]);
-
-        await interaction.reply({ content: `✅ ${user} has been whitelisted for ${days} days!` });
-    }
-
-    // ---------- /resethwid ----------
-    if (commandName === 'resethwid') {
-        if (!isAdmin(interaction)) {
-            return interaction.reply({ content: '❌ You need Administrator permission.', ephemeral: true });
-        }
-
-        const user = interaction.options.getUser('user');
-        await interaction.reply({ content: `✅ HWID reset for ${user}!` });
-    }
-
-    // ---------- /setup-tickets ----------
-    if (commandName === 'setup-tickets') {
-        if (!isAdmin(interaction)) {
-            return interaction.reply({ content: '❌ You need Administrator permission.', ephemeral: true });
-        }
-
-        const supportRole = interaction.options.getRole('support_role');
-
-        const category = await interaction.guild.channels.create({
-            name: '🎫 Tickets',
-            type: 4
-        });
-
-        db.run(`INSERT OR REPLACE INTO support_config (guild_id, category_id, support_role_id)
-                VALUES (?, ?, ?)`,
-            [interaction.guildId, category.id, supportRole.id]);
-
-        const channel = await interaction.guild.channels.create({
-            name: 'create-ticket',
-            type: 0,
-            parent: category.id
-        });
-
-        const embed = new EmbedBuilder()
-            .setTitle('🎫 Support Tickets')
-            .setDescription('Click the button below to create a support ticket!')
-            .setColor(0x5865F2);
-
-        const row = new ActionRowBuilder()
-            .addComponents(
-                new ButtonBuilder()
-                    .setCustomId('create_ticket')
-                    .setLabel('🎫 Create Ticket')
-                    .setStyle(ButtonStyle.Success)
-            );
-
-        await channel.send({ embeds: [embed], components: [row] });
-        await interaction.reply({ content: `✅ Ticket system setup complete!`, ephemeral: true });
-    }
-
-    // ---------- /mute ----------
-    if (commandName === 'mute') {
-        if (!isAdmin(interaction)) {
-            return interaction.reply({ content: '❌ You need Administrator permission.', ephemeral: true });
-        }
-
-        const user = interaction.options.getUser('user');
-        const minutes = interaction.options.getInteger('minutes');
-        const member = interaction.guild.members.cache.get(user.id);
-
-        if (!member) {
-            return interaction.reply({ content: '❌ User not found!', ephemeral: true });
-        }
-
-        const duration = minutes * 60 * 1000;
-        await member.timeout(duration, `Muted by ${interaction.user.tag}`);
-
-        db.all(`SELECT channel_id FROM tickets WHERE guild_id = ? AND user_id = ? AND status = 'open'`,
-            [interaction.guildId, user.id],
-            async (err, rows) => {
-                if (rows) {
-                    for (const row of rows) {
-                        const channel = interaction.guild.channels.cache.get(row.channel_id);
-                        if (channel) await channel.delete();
-                    }
-                    db.run(`UPDATE tickets SET status = 'closed' WHERE guild_id = ? AND user_id = ?`,
-                        [interaction.guildId, user.id]);
-                }
-            }
-        );
-
-        db.run(`INSERT OR REPLACE INTO mutes (guild_id, user_id, expires_at)
-                VALUES (?, ?, ?)`,
-            [interaction.guildId, user.id, new Date(Date.now() + duration).toISOString()]);
-
-        await interaction.reply({ content: `✅ ${user} has been muted for ${minutes} minutes and their tickets deleted!` });
-    }
+  }
 });
 
-// ---------- BUTTON HANDLERS ----------
-client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isButton()) return;
+async function handleCommand(interaction) {
+  const commandName = interaction.commandName;
 
-    // Redeem Key Button
-    if (interaction.customId === 'redeem_key') {
-        const modal = new ModalBuilder()
-            .setCustomId('redeem_modal')
-            .setTitle('🔑 Redeem Key');
+  if (commandName === 'setup') {
+    const adminRole = interaction.options.getRole('admin_role', true);
+    const customerRole = interaction.options.getRole('customer_role', true);
+    const panelChannel = interaction.options.getChannel('panel_channel', true);
+    const logChannel = interaction.options.getChannel('log_channel', false);
 
-        const keyInput = new TextInputBuilder()
-            .setCustomId('key_input')
-            .setLabel('Enter your key')
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder('XXXX-XXXX-XXXX-XXXX')
-            .setRequired(true);
+    upsertSettings(interaction.guildId, {
+      admin_role_id: adminRole.id,
+      customer_role_id: customerRole.id,
+      log_channel_id: logChannel ? logChannel.id : null,
+      panel_channel_id: panelChannel.id
+    });
 
-        const row = new ActionRowBuilder().addComponents(keyInput);
-        modal.addComponents(row);
+    const panelMessage = await panelChannel.send({
+      embeds: [panelEmbed()],
+      components: [panelButtons()]
+    });
 
-        await interaction.showModal(modal);
+    upsertSettings(interaction.guildId, { panel_message_id: panelMessage.id });
+
+    await interaction.reply({
+      ephemeral: true,
+      content: `Setup complete. Panel posted in ${panelChannel}. Admin role: ${adminRole}. Customer role: ${customerRole}.`
+    });
+
+    await logGuild(interaction.guild, `⚙️ License panel setup by <@${interaction.user.id}>.`);
+    return;
+  }
+
+  const adminCommands = ['createscript', 'scripts', 'genkey', 'revoke', 'keyinfo', 'loader'];
+  if (adminCommands.includes(commandName) && !requireAdmin(interaction)) {
+    await interaction.reply({ ephemeral: true, content: 'You need Administrator or the configured admin role to use this command.' });
+    return;
+  }
+
+  if (commandName === 'createscript') {
+    const name = interaction.options.getString('name', true);
+    const script = createScript({ guildId: interaction.guildId, name, createdBy: interaction.user.id });
+
+    await interaction.reply({
+      ephemeral: true,
+      embeds: [
+        new EmbedBuilder()
+          .setTitle('Script Created')
+          .setColor(0x57f287)
+          .setDescription('Save the API secret now. It is only shown once.')
+          .addFields(
+            { name: 'Name', value: script.name, inline: true },
+            { name: 'Script ID', value: `\`${script.id}\``, inline: true },
+            { name: 'API Secret', value: `\`${script.apiSecret}\`` }
+          )
+      ]
+    });
+
+    await logGuild(interaction.guild, `📦 Script \`${name}\` created by <@${interaction.user.id}>.`);
+    return;
+  }
+
+  if (commandName === 'scripts') {
+    const scripts = db.prepare('SELECT id, name, api_secret_preview FROM scripts WHERE guild_id = ? ORDER BY created_at DESC').all(interaction.guildId);
+
+    if (!scripts.length) {
+      await interaction.reply({ ephemeral: true, content: 'No scripts yet. Use `/createscript`.' });
+      return;
     }
 
-    // Create Ticket Button
-    if (interaction.customId === 'create_ticket') {
-        db.get(`SELECT category_id, support_role_id FROM support_config WHERE guild_id = ?`,
-            [interaction.guildId],
-            async (err, config) => {
-                if (!config) {
-                    return interaction.reply({ content: '❌ Ticket system not configured!', ephemeral: true });
-                }
+    await interaction.reply({
+      ephemeral: true,
+      embeds: [
+        new EmbedBuilder()
+          .setTitle('Scripts')
+          .setColor(0x5865f2)
+          .setDescription(scripts.map(s => `**${s.name}**\nID: \`${s.id}\`\nSecret: \`${s.api_secret_preview}\``).join('\n\n'))
+      ]
+    });
+    return;
+  }
 
-                const ticketId = 'ticket-' + Date.now().toString(36);
-                const category = interaction.guild.channels.cache.get(config.category_id);
+  if (commandName === 'genkey') {
+    const scriptId = interaction.options.getString('script_id', true);
+    const days = interaction.options.getInteger('days', true);
+    const quantity = interaction.options.getInteger('quantity') || 1;
 
-                const channel = await interaction.guild.channels.create({
-                    name: ticketId,
-                    type: 0,
-                    parent: category ? category.id : null,
-                    permissionOverwrites: [
-                        { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-                        { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
-                        { id: config.support_role_id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
-                    ]
-                });
-
-                db.run(`INSERT INTO tickets (ticket_id, guild_id, user_id, channel_id, created_at)
-                        VALUES (?, ?, ?, ?, ?)`,
-                    [ticketId, interaction.guildId, interaction.user.id, channel.id, new Date().toISOString()]);
-
-                const embed = new EmbedBuilder()
-                    .setTitle('🎫 Ticket Created')
-                    .setDescription(`Support will be with you shortly.`)
-                    .setColor(0x5865F2)
-                    .addFields(
-                        { name: 'Created by', value: interaction.user.toString() },
-                        { name: 'Ticket ID', value: ticketId }
-                    );
-
-                const row = new ActionRowBuilder()
-                    .addComponents(
-                        new ButtonBuilder()
-                            .setCustomId('close_ticket')
-                            .setLabel('🔒 Close Ticket')
-                            .setStyle(ButtonStyle.Danger)
-                    );
-
-                await channel.send({ embeds: [embed], components: [row] });
-                await interaction.reply({ content: `✅ Ticket created: ${channel}`, ephemeral: true });
-            }
-        );
+    const script = db.prepare('SELECT * FROM scripts WHERE id = ? AND guild_id = ?').get(scriptId, interaction.guildId);
+    if (!script) {
+      await interaction.reply({ ephemeral: true, content: 'Invalid script ID.' });
+      return;
     }
 
-    // Close Ticket Button
-    if (interaction.customId === 'close_ticket') {
-        await interaction.reply({ content: '🔒 Closing ticket...', ephemeral: true });
-        setTimeout(async () => {
-            await interaction.channel.delete();
-        }, 2000);
+    const expiresAt = addDays(days);
+    const insert = db.prepare('INSERT INTO licenses (license_key, script_id, guild_id, expires_at, created_by) VALUES (?, ?, ?, ?, ?)');
+    const keys = [];
+
+    for (let i = 0; i < quantity; i++) {
+      const key = makeKey('PS');
+      insert.run(key, scriptId, interaction.guildId, expiresAt, interaction.user.id);
+      keys.push(key);
     }
 
-    // Copy Script Button (tap to copy)
-    if (interaction.customId && interaction.customId.startsWith('copy_script_')) {
-        db.get(`SELECT script_content FROM hosted_scripts WHERE guild_id = ? ORDER BY id DESC LIMIT 1`,
-            [interaction.guildId],
-            async (err, row) => {
-                if (row) {
-                    await interaction.reply({ 
-                        content: `✅ Script copied!\n\`\`\`lua\n${row.script_content}\n\`\`\``, 
-                        ephemeral: true 
-                    });
-                } else {
-                    await interaction.reply({ content: '❌ Script not found!', ephemeral: true });
-                }
-            }
-        );
+    await interaction.reply({
+      ephemeral: true,
+      content: `Generated ${keys.length} key(s) for **${script.name}**:\n\n${keys.map(k => `\`${k}\``).join('\n')}\n\nExpiry: ${expiresAt || 'Lifetime'}`
+    });
+
+    await logGuild(interaction.guild, `🔑 ${keys.length} key(s) generated for \`${script.name}\` by <@${interaction.user.id}>.`);
+    return;
+  }
+
+  if (commandName === 'redeem') {
+    const key = interaction.options.getString('key', true).trim();
+    const result = await redeemKey({ guild: interaction.guild, member: interaction.member, userId: interaction.user.id, key });
+    await interaction.reply({ ephemeral: true, content: result.message });
+    return;
+  }
+
+  if (commandName === 'reset-hwid') {
+    const key = interaction.options.getString('key', true).trim();
+    const admin = requireAdmin(interaction);
+    const result = await resetHwid({ guild: interaction.guild, userId: interaction.user.id, key, admin });
+    await interaction.reply({ ephemeral: true, content: result.message });
+    return;
+  }
+
+  if (commandName === 'revoke') {
+    const key = interaction.options.getString('key', true).trim();
+    const info = db.prepare('SELECT * FROM licenses WHERE license_key = ? AND guild_id = ?').get(key, interaction.guildId);
+
+    if (!info) {
+      await interaction.reply({ ephemeral: true, content: 'Key not found.' });
+      return;
     }
-});
 
-// ---------- MODAL HANDLERS ----------
-client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isModalSubmit()) return;
+    db.prepare('UPDATE licenses SET revoked = 1 WHERE license_key = ?').run(key);
+    await interaction.reply({ ephemeral: true, content: `Revoked \`${key}\`.` });
+    await logGuild(interaction.guild, `⛔ Key \`${key}\` revoked by <@${interaction.user.id}>.`);
+    return;
+  }
 
-    // Redeem Key Modal
-    if (interaction.customId === 'redeem_modal') {
-        const key = interaction.fields.getTextInputValue('key_input');
-        
-        db.get(`SELECT * FROM keys WHERE key_code = ? AND status = 'active'`,
-            [key],
-            async (err, row) => {
-                if (row) {
-                    // Check if expired
-                    if (row.expires_at && new Date(row.expires_at) < new Date()) {
-                        db.run(`UPDATE keys SET status = 'expired' WHERE key_code = ?`, [key]);
-                        return interaction.reply({ content: '❌ This key has expired!', ephemeral: true });
-                    }
+  if (commandName === 'keyinfo') {
+    const key = interaction.options.getString('key', true).trim();
+    const info = db.prepare(`
+      SELECT l.*, s.name AS script_name
+      FROM licenses l
+      JOIN scripts s ON s.id = l.script_id
+      WHERE l.license_key = ? AND l.guild_id = ?
+    `).get(key, interaction.guildId);
 
-                    // Mark as used
-                    db.run(`UPDATE keys SET status = 'used', used_by = ?, used_at = ? WHERE key_code = ?`,
-                        [interaction.user.id, new Date().toISOString(), key]);
-
-                    // Whitelist the user
-                    const expires = new Date();
-                    expires.setDate(expires.getDate() + 30);
-                    db.run(`INSERT OR REPLACE INTO whitelist (guild_id, user_id, expires_at)
-                            VALUES (?, ?, ?)`,
-                        [interaction.guildId, interaction.user.id, expires.toISOString()]);
-
-                    // Give the role if configured
-                    db.get(`SELECT role_id FROM panel_roles WHERE guild_id = ?`,
-                        [interaction.guildId],
-                        async (err, roleRow) => {
-                            if (roleRow) {
-                                try {
-                                    const member = await interaction.guild.members.fetch(interaction.user.id);
-                                    await member.roles.add(roleRow.role_id);
-                                } catch (e) {
-                                    console.log('Could not add role:', e);
-                                }
-                            }
-                        }
-                    );
-
-                    await interaction.reply({ 
-                        content: `✅ Key redeemed successfully! You have been whitelisted and given your role.`, 
-                        ephemeral: true 
-                    });
-                } else {
-                    await interaction.reply({ content: '❌ Invalid or already used key!', ephemeral: true });
-                }
-            }
-        );
+    if (!info) {
+      await interaction.reply({ ephemeral: true, content: 'Key not found.' });
+      return;
     }
-});
 
-// ---------- START ----------
+    await interaction.reply({
+      ephemeral: true,
+      embeds: [
+        new EmbedBuilder()
+          .setTitle('Key Info')
+          .setColor(0xfee75c)
+          .addFields(
+            { name: 'Key', value: `\`${info.license_key}\`` },
+            { name: 'Script', value: `${info.script_name} (\`${info.script_id}\`)`, inline: true },
+            { name: 'Status', value: keyStatus(info), inline: true },
+            { name: 'User', value: info.discord_user_id ? `<@${info.discord_user_id}>` : 'None', inline: true },
+            { name: 'HWID', value: info.hwid ? `\`${info.hwid}\`` : 'None', inline: true },
+            { name: 'Expires', value: info.expires_at || 'Lifetime', inline: true }
+          )
+      ]
+    });
+    return;
+  }
+
+  if (commandName === 'mykeys') {
+    await sendMyKeys(interaction, interaction.user.id);
+    return;
+  }
+
+  if (commandName === 'loader') {
+    const scriptId = interaction.options.getString('script_id', true);
+    const script = db.prepare('SELECT * FROM scripts WHERE id = ? AND guild_id = ?').get(scriptId, interaction.guildId);
+
+    if (!script) {
+      await interaction.reply({ ephemeral: true, content: 'Invalid script ID.' });
+      return;
+    }
+
+    const example = `-- Generic Lua example. Change request/http_request for your executor/environment.\nlocal key = "PASTE_USER_KEY"\nlocal hwid = "PUT_HWID_HERE"\nlocal apiUrl = "http://YOUR_SERVER_IP:${process.env.API_PORT || 3000}/api/verify"\n\nlocal body = '{"script_id":"${scriptId}","key":"' .. key .. '","hwid":"' .. hwid .. '"}'\n\nlocal res = request({\n  Url = apiUrl,\n  Method = "POST",\n  Headers = {\n    ["Content-Type"] = "application/json",\n    ["X-API-Secret"] = "PASTE_SCRIPT_API_SECRET"\n  },\n  Body = body\n})\n\nprint(res.Body)`;
+
+    await interaction.reply({ ephemeral: true, content: `\`\`\`lua\n${example}\n\`\`\`` });
+  }
+}
+
+async function sendMyKeys(interaction, userId) {
+  const rows = db.prepare(`
+    SELECT l.*, s.name AS script_name
+    FROM licenses l
+    JOIN scripts s ON s.id = l.script_id
+    WHERE l.guild_id = ? AND l.discord_user_id = ?
+    ORDER BY l.redeemed_at DESC
+  `).all(interaction.guildId, userId);
+
+  const content = rows.length
+    ? rows.map(r => `**${r.script_name}** — \`${r.license_key}\` — ${keyStatus(r)} — expires: ${r.expires_at || 'Lifetime'} — HWID: ${r.hwid ? 'set' : 'not set'}`).join('\n')
+    : 'You have no redeemed keys.';
+
+  if (interaction.deferred || interaction.replied) {
+    await interaction.followUp({ ephemeral: true, content });
+  } else {
+    await interaction.reply({ ephemeral: true, content });
+  }
+}
+
+async function handleButton(interaction) {
+  if (interaction.customId === 'panel_redeem') {
+    const modal = new ModalBuilder().setCustomId('modal_redeem').setTitle('Redeem License Key');
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('key').setLabel('License key').setStyle(TextInputStyle.Short).setRequired(true)
+      )
+    );
+    await interaction.showModal(modal);
+    return;
+  }
+
+  if (interaction.customId === 'panel_reset_hwid') {
+    const modal = new ModalBuilder().setCustomId('modal_reset_hwid').setTitle('Reset HWID');
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('key').setLabel('License key').setStyle(TextInputStyle.Short).setRequired(true)
+      )
+    );
+    await interaction.showModal(modal);
+    return;
+  }
+
+  if (interaction.customId === 'panel_mykeys') {
+    await sendMyKeys(interaction, interaction.user.id);
+  }
+}
+
+async function handleModal(interaction) {
+  const key = interaction.fields.getTextInputValue('key').trim();
+
+  if (interaction.customId === 'modal_redeem') {
+    const result = await redeemKey({ guild: interaction.guild, member: interaction.member, userId: interaction.user.id, key });
+    await interaction.reply({ ephemeral: true, content: result.message });
+    return;
+  }
+
+  if (interaction.customId === 'modal_reset_hwid') {
+    const result = await resetHwid({ guild: interaction.guild, userId: interaction.user.id, key, admin: false });
+    await interaction.reply({ ephemeral: true, content: result.message });
+  }
+}
+
+function startApiServer() {
+  const app = express();
+  app.use(express.json({ limit: '64kb' }));
+
+  app.get('/health', (req, res) => {
+    res.json({ ok: true });
+  });
+
+  app.post('/api/verify', (req, res) => {
+    const globalToken = process.env.GLOBAL_API_TOKEN;
+
+    if (globalToken && req.header('X-Global-Token') !== globalToken) {
+      return res.status(401).json({ ok: false, message: 'Invalid global token' });
+    }
+
+    const { script_id, key, hwid } = req.body || {};
+    const apiSecret = req.header('X-API-Secret');
+
+    if (!script_id || !key || !hwid || !apiSecret) {
+      return res.status(400).json({ ok: false, message: 'Missing script_id, key, hwid, or X-API-Secret' });
+    }
+
+    const script = db.prepare('SELECT * FROM scripts WHERE id = ?').get(script_id);
+    if (!script || script.api_secret_hash !== hashSecret(apiSecret)) {
+      return res.status(401).json({ ok: false, message: 'Invalid script or API secret' });
+    }
+
+    const license = db.prepare('SELECT * FROM licenses WHERE license_key = ? AND script_id = ?').get(key, script_id);
+
+    if (!license) return res.status(404).json({ ok: false, message: 'Invalid key' });
+    if (license.revoked) return res.status(403).json({ ok: false, message: 'Key revoked' });
+    if (isExpired(license.expires_at)) return res.status(403).json({ ok: false, message: 'Key expired' });
+    if (!license.discord_user_id) return res.status(403).json({ ok: false, message: 'Key not redeemed' });
+    if (license.hwid && license.hwid !== hwid) return res.status(403).json({ ok: false, message: 'HWID mismatch' });
+
+    if (!license.hwid) {
+      db.prepare('UPDATE licenses SET hwid = ? WHERE license_key = ?').run(hwid, key);
+    }
+
+    return res.json({
+      ok: true,
+      message: 'License verified',
+      discord_user_id: license.discord_user_id,
+      expires_at: license.expires_at,
+      script_id
+    });
+  });
+
+  const host = process.env.API_HOST || '0.0.0.0';
+  const port = Number(process.env.API_PORT || 3000);
+
+  app.listen(port, host, () => {
+    console.log(`Verification API listening on http://${host}:${port}`);
+  });
+}
+
 client.login(TOKEN);
