@@ -1,5 +1,5 @@
 // server.js
-// Single-file Node.js Discord license bot. No ./src folder needed.
+// Single-file Node.js Discord license bot with KeyForge-style dashboard
 
 require('dotenv').config();
 
@@ -56,7 +56,7 @@ if (!DISCORD_TOKEN) {
   process.exit(1);
 }
 
-// ---------------- Commands ----------------
+// ---------------- Commands (Removed Ad Links and Earn related) ----------------
 const commands = [
   new SlashCommandBuilder()
     .setName('help')
@@ -87,7 +87,6 @@ const commands = [
       .addStringOption(o => o.setName('color').setDescription('Hex color, example #5865F2').setRequired(false))
       .addStringOption(o => o.setName('title').setDescription('Key system title').setRequired(false).setMaxLength(100))
       .addStringOption(o => o.setName('description').setDescription('Key system description').setRequired(false).setMaxLength(500))),
-
 
   new SlashCommandBuilder()
     .setName('apply')
@@ -248,8 +247,6 @@ async function deployCommands() {
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
     console.log(`Deployed ${commands.length} commands to guild ${GUILD_ID}.`);
 
-    // Remove old global commands like /setup and /genkey so they stop showing.
-    // Set CLEAR_GLOBAL_COMMANDS=false if you intentionally use global commands.
     if (process.env.CLEAR_GLOBAL_COMMANDS !== 'false') {
       await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
       console.log('Cleared global commands.');
@@ -346,7 +343,6 @@ CREATE TABLE IF NOT EXISTS key_system_templates (
   created_by TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-
 
 CREATE TABLE IF NOT EXISTS execution_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -727,7 +723,6 @@ return (function(_sid, ...)
       end
       local src1 = debug.getinfo(1).source
       local sum1 = _sc(src1)
-      -- Use a simple loop for wait if task.wait isn't available
       if typeof(task) == "table" and task.wait then task.wait(0.1) end
       local src2 = debug.getinfo(1).source
       local sum2 = _sc(src2)
@@ -761,7 +756,6 @@ end)(...)
 }
 
 async function callObfuscator(luaCode, level = 'standard') {
-  // Calls the Karma Obfuscator API to obfuscate the given Lua code.
   const selected = String(level || 'standard').toLowerCase();
   const apiUrl = (OBFUSCATOR_API_URL || 'https://luarmor-bot-1-0yt4.onrender.com').replace(/\/$/, '') + '/api/obfuscate';
 
@@ -783,8 +777,6 @@ async function callObfuscator(luaCode, level = 'standard') {
 
   return data.obfuscated;
 }
-
-
 
 function verifyAdmin(member, settings) {
   if (!member) return false;
@@ -820,7 +812,6 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-// Prevent duplicate replies if Discord/hosting sends the same interaction twice.
 const processedInteractions = new Set();
 
 function panelEmbed(guildId, sentBy = null) {
@@ -869,10 +860,7 @@ function keySystemEmbed(guildId) {
     .setFooter({ text: 'Karma Protection Key System', iconURL: `${publicBaseUrl()}/assets/karma-logo.png` });
 }
 
-
 async function logGuild(guild, text) {
-  // Disabled by default so commands do not appear to send two messages.
-  // If you want separate log messages later, set ENABLE_COMMAND_LOGS=true in Render.
   if (process.env.ENABLE_COMMAND_LOGS !== 'true') return;
   const settings = getSettings(guild.id);
   if (!settings || !settings.log_channel_id) return;
@@ -1009,7 +997,6 @@ async function handleCommand(interaction) {
     };
     upsertSettings(interaction.guildId, patch);
 
-    // Only ONE Discord response: the panel itself. No channel.send + confirmation.
     const panelMessage = await interaction.reply({
       embeds: [panelEmbed(interaction.guildId, interaction.user.username)],
       components: panelButtons(),
@@ -1106,8 +1093,6 @@ async function handleCommand(interaction) {
   }
 
   if (commandName === 'mykeys') return sendMyKeys(interaction, interaction.user.id);
-
-  if (commandName === 'freekey') return giveFreeKey(interaction);
 
   if (commandName === 'getrole') return giveBuyerRole(interaction);
 
@@ -1346,7 +1331,6 @@ async function sendMyKeys(interaction, userId) {
   else await interaction.reply({ ephemeral: true, content });
 }
 
-
 async function sendHostedScripts(interaction) {
   const settings = getSettings(interaction.guildId);
   let rows;
@@ -1381,21 +1365,7 @@ async function giveBuyerRole(interaction) {
   return interaction.reply({ ephemeral: true, content: 'Buyer role added.' });
 }
 
-async function giveFreeKey(interaction) {
-  const base = publicBaseUrl();
-  const linkvertiseUrl = process.env.LINKVERTISE_URL || `${base}/dashboard?tab=redeem`;
-  return interaction.reply({
-    ephemeral: true,
-    content: [
-      '**Free Key Steps**',
-      'Free keys will require Linkvertise steps before a key is issued.',
-      '',
-      `Step page: ${linkvertiseUrl}`,
-      '',
-      'Linkvertise is not fully connected yet, so no key was generated. Once you add LINKVERTISE_URL / callback verification, this button can issue the key after completion.'
-    ].join('\n')
-  });
-}
+// Removed giveFreeKey function (ad links / monetization)
 
 async function handleButton(interaction) {
   if (interaction.customId === 'panel_view_script') {
@@ -1416,10 +1386,6 @@ async function handleButton(interaction) {
 
   if (interaction.customId === 'panel_get_buyer_role') {
     return giveBuyerRole(interaction);
-  }
-
-  if (interaction.customId === 'panel_free_key') {
-    return giveFreeKey(interaction);
   }
 
   if (interaction.customId === 'panel_reset_hwid') {
@@ -1457,50 +1423,18 @@ async function handleModal(interaction) {
   }
 }
 
-function kolsecHomePage() {
-  const scriptCount = db.prepare('SELECT COUNT(*) AS count FROM scripts').get().count;
-  const keyCount = db.prepare('SELECT COUNT(*) AS count FROM licenses').get().count;
-  const hostedCount = db.prepare('SELECT COUNT(*) AS count FROM hosted_scripts').get().count;
+// ============================================================
+// KEYFORGE-STYLE DASHBOARD HTML
+// ============================================================
 
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Karma Protection — Lua Code Protection & Licensing</title>
-  <meta name="description" content="Karma Protection protects Lua code with obfuscation, HWID-locked keys, hosted loadstrings, and a Discord synced panel." />
-  <style>
-    :root{--bg:#030303;--card:rgba(15,15,16,0.85);--muted:#a1a1aa;--line:rgba(212,175,55,0.2);--text:#f8fafc;--primary:#d4af37;--soft:#151518;--gold:#d4af37}
-    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:linear-gradient(rgba(0,0,0,0.7),rgba(0,0,0,0.7)),url("/assets/bg.png") center/cover fixed no-repeat,#030303;color:var(--text);font-family:"SF Pro Display","Aptos","Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.01em}body:before{content:'';position:fixed;right:-170px;bottom:-170px;width:620px;height:620px;background:url('/assets/karma-logo.png') center/contain no-repeat;opacity:.045;filter:grayscale(1);pointer-events:none}.grid{position:fixed;inset:0;background-image:linear-gradient(rgba(255,255,255,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.055) 1px,transparent 1px);background-size:64px 64px;mask-image:linear-gradient(to bottom,#000,transparent 82%);pointer-events:none}a{color:inherit;text-decoration:none}.container{width:min(1180px,92%);margin:auto}header{position:sticky;top:0;z-index:40;border-bottom:1px solid rgba(255,255,255,.12);background:rgba(3,3,3,.82);backdrop-filter:blur(18px)}.nav{height:64px;display:flex;align-items:center;justify-content:space-between}.brand{position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;font-weight:780}.brand img{width:34px;height:34px;border-radius:10px;object-fit:cover;border:1px solid rgba(212,175,55,0.5)}.beta{font:10px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;border:1px solid #2d2d32;border-radius:5px;padding:2px 6px;color:#b6b6bd}.menu{width:38px;height:38px;display:grid;place-items:center;border:1px solid #2b2b30;border-radius:10px;background:rgba(255,255,255,.03);color:#fff}.btn{display:inline-flex;align-items:center;gap:10px;border-radius:10px;border:1px solid rgba(212,175,55,0.4);background:rgba(255,255,255,.055);padding:13px 18px;font:800 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;color:#fff}.btn.primary{background:#fff;color:#050505;border-color:#fff;box-shadow:0 0 40px rgba(255,255,255,.14)}.hero{position:relative;text-align:center;padding:105px 0 80px}.pill{display:inline-flex;gap:10px;align-items:center;border:1px solid rgba(212,175,55,0.4);background:rgba(255,255,255,.045);border-radius:999px;padding:8px 13px;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#d4d4d8}.pulse{width:7px;height:7px;border-radius:50%;background:#fff;box-shadow:0 0 18px #fff}.hero h1{font-size:clamp(50px,8vw,104px);line-height:1.02;letter-spacing:-.075em;margin:26px auto 18px;max-width:930px}.glow{text-shadow:0 0 32px rgba(255,255,255,.34)}.hero p{max-width:680px;margin:0 auto;color:#a1a1aa;font:500 15px/1.8 ui-monospace,monospace}.actions{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin-top:34px}.heroVideo{margin:56px auto 0;max-width:860px;border:1px solid rgba(255,255,255,.16);border-radius:24px;overflow:hidden;background:linear-gradient(180deg,#111,#070707);box-shadow:0 0 80px rgba(255,255,255,.08)}.fakeVideo{aspect-ratio:16/9;display:grid;place-items:center;background:radial-gradient(circle at 50% 40%,rgba(255,255,255,.18),transparent 20%),linear-gradient(135deg,#050505,#151515,#050505);background-size:160% 160%;animation:shift 7s infinite alternate}.fakeVideo img{width:110px;height:110px;border-radius:28px;object-fit:cover;filter:grayscale(1);opacity:.9}@keyframes shift{to{background-position:100% 60%}}.caption{padding:14px;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#888}.section{border-top:1px solid rgba(255,255,255,.10);padding:88px 0}.sectionHead{max-width:720px;margin-bottom:34px}.kicker{font:800 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#fff;margin-bottom:10px}.section h2{font-size:clamp(34px,5vw,58px);line-height:1.02;letter-spacing:-.055em;margin:0}.muted{color:#a1a1aa}.features{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.card{border:1px solid rgba(255,255,255,.13);border-radius:28px;background:rgba(15,15,16,.72);padding:26px;transition:.2s ease;box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}.card:hover{border-color:rgba(255,255,255,.35);transform:translateY(-2px);box-shadow:0 0 60px rgba(255,255,255,.07)}.icon{width:38px;height:38px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.18);border-radius:12px;margin-bottom:16px}.card h3{margin:0 0 8px;font-size:18px}.card p{margin:0;color:#a1a1aa;font:500 12px/1.7 ui-monospace,monospace}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.stat{border:1px solid rgba(255,255,255,.13);border-radius:18px;background:rgba(15,15,16,.65);padding:22px;display:flex;gap:15px;align-items:center}.num{font-size:34px;font-weight:850}.pricing{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid rgba(255,255,255,.13);border-radius:28px;overflow:hidden;background:rgba(15,15,16,.45)}.plan{padding:32px}.plan+ .plan{border-left:1px solid rgba(255,255,255,.13);background:rgba(255,255,255,.035)}.price{font-size:64px;font-weight:900;letter-spacing:-.06em}.plan ul{list-style:none;padding:0;margin:22px 0;display:grid;gap:13px}.plan li:before{content:'✓';margin-right:10px}.cta{text-align:center;max-width:760px;margin:auto}.footer{border-top:1px solid rgba(255,255,255,.10);padding:34px 0;color:#777;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}@media(max-width:850px){.features,.stats,.pricing{grid-template-columns:1fr}.plan+.plan{border-left:0;border-top:1px solid rgba(255,255,255,.13)}.brand{position:static;transform:none}.nav{gap:12px}.hero{text-align:left}.actions{justify-content:flex-start}}
-  </style>
-</head>
-<body>
-  <div class="grid"></div>
-  <header><div class="container nav"><a class="menu" href="#features">☰</a><a class="brand" href="/"><img src="/assets/karma-logo.png" alt="Karma Protection"><span>Karma Protection</span><span class="beta">beta</span></a><a class="btn" href="${DISCORD_INVITE_URL}">Discord</a></div></header>
-  <main>
-    <section class="hero"><div class="container"><a class="pill" href="#builds"><span class="pulse"></span>The black & white standard for Lua security</a><h1>Protect. <span class="glow">Monetize.</span> Earn.</h1><p>Drop your project, get a secure build, and monetize with confidence. HWID-lock, whitelist keys, obfuscate, and ship straight from Discord.</p><div class="actions"><a class="btn primary" href="/login">Enter the lab</a><a class="btn" href="/dashboard?tab=obfuscate">Obfuscator</a><a class="btn" href="#features">Explore features</a></div><figure class="heroVideo"><div class="fakeVideo"><img src="/assets/karma-logo.png" alt="Karma Protection"></div><figcaption class="caption">Create a protected script in seconds.</figcaption></figure></div></section>
-    <section id="features" class="section"><div class="container"><div class="sectionHead"><div class="kicker">Karma Protection features</div><h2>Everything you need to ship and protect.</h2></div><div class="features"><div class="card"><div class="icon">CPU</div><h3>Custom Obfuscator</h3><p>Multi-layer local protection with anti-tamper checks, encoded payloads, and protected loadstrings.</p></div><div class="card"><div class="icon">KEY</div><h3>Whitelist System</h3><p>Hand out keys, let clients redeem, revoke, extend, and reset HWID access.</p></div><div class="card"><div class="icon">BOT</div><h3>Discord Bot</h3><p>Panels, script hosting, key generation, HWID bans, and API linking from Discord.</p></div><div class="card"><div class="icon">DASH</div><h3>Dashboard</h3><p>Scripts, protected builds, upload files, users, owner tools, and live status in one place.</p></div><div class="card"><div class="icon">ID</div><h3>HWID Tracker</h3><p>Lock each key to a single device on first run. Reset or ban HWIDs anytime.</p></div><div class="card"><div class="icon">LOAD</div><h3>Protected Loadstrings</h3><p>Served through a protected loader route so the raw endpoint is not exposed in the panel.</p></div></div></div></section>
-    <section id="builds" class="section"><div class="container"><div class="sectionHead"><div class="kicker">latest builds</div><h2>Shipping every week.</h2><p class="muted">Recent protections and platform improvements.</p></div><div class="features"><div class="card"><div class="kicker">v1.76.005</div><h3>Anti-dump hardening</h3><p>Payloads use runtime checks and decoys so dumped files come back useless.</p></div><div class="card"><div class="kicker">v1.76.004</div><h3>Loader execution recovery</h3><p>Protected loadstrings now fetch and execute through the /loadstring route.</p></div><div class="card"><div class="kicker">v1.76.003</div><h3>Runtime integrity</h3><p>Reduced fingerprinting and strengthened payload integrity checks.</p></div></div></div></section>
-    <section class="section"><div class="container"><div class="stats"><div class="stat"><div class="num">${scriptCount}</div><div><b>projects created</b><br><span class="muted">script products</span></div></div><div class="stat"><div class="num">${hostedCount}</div><div><b>scripts protected</b><br><span class="muted">hosted builds</span></div></div><div class="stat"><div class="num">${keyCount}</div><div><b>keys issued</b><br><span class="muted">license keys</span></div></div></div></div></section>
-    <section id="pricing" class="section"><div class="container"><div class="sectionHead" style="text-align:center;margin-inline:auto"><div class="kicker">pricing</div><h2>Simple plans. Real protection.</h2></div><div class="pricing"><div class="plan"><div class="kicker">Citizen</div><div class="price">$0</div><p class="muted">forever</p><ul><li>Discord bot + panel deploy</li><li>Whitelist keys</li><li>Standard obfuscation</li><li>20 scripts by default</li></ul><a class="btn" href="/login">Get Started Free</a></div><div class="plan"><div class="kicker">Royal</div><div class="price">$3</div><p class="muted">month</p><ul><li>Higher script limits</li><li>Maximum obfuscation</li><li>Priority builds</li><li>Owner controlled upgrades</li></ul><a class="btn primary" href="/login">Upgrade</a></div></div></div></section>
-    <section class="section"><div class="container cta"><h2>Ready to take back control?</h2><p class="muted">Sign in with Discord, upload your first script, and ship in minutes.</p><div class="actions"><a class="btn primary" href="/login">Sign in with Discord</a><a class="btn" href="${DISCORD_INVITE_URL}">Join the Discord</a></div></div></section>
-  </main>
-  <footer class="container footer"><span>© Karma Protection</span><span>Protect, Monetize, Earn</span></footer>
-</body>
-</html>`;
-}
-
-function makeUserApiKey(userId) {
-  const sig = crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(`api:${userId}`).digest('base64url').slice(0, 32);
-  return `ks_${userId}_${sig}`;
-}
-
-function discordDashboardPage(user, req = { query: {} }) {
+function keyforgeDashboardPage(user, req = { query: {} }) {
   const username = escapeHtml(user.global_name || user.username || 'Discord User');
   const avatar = user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=128` : '/assets/karma-logo.png';
   const apiKey = makeUserApiKey(user.id);
   let tab = String(req.query.tab || 'overview');
-  if (['keys','how','tutorials','redeem','settings','discord','sources','storage'].includes(tab)) tab = 'overview';
+  const validTabs = ['overview', 'scripts', 'keys', 'obfuscate', 'how', 'redeem', 'discord', 'settings', 'owner', 'storage'];
+  if (!validTabs.includes(tab)) tab = 'overview';
+  
   const selectedId = String(req.query.script || '');
   const scripts = db.prepare('SELECT id, name, obfuscated, created_at, created_by FROM hosted_scripts ORDER BY created_at DESC LIMIT 500').all();
   const selected = selectedId ? db.prepare('SELECT * FROM hosted_scripts WHERE id = ?').get(selectedId) : (scripts[0] ? db.prepare('SELECT * FROM hosted_scripts WHERE id = ?').get(scripts[0].id) : null);
@@ -1512,49 +1446,751 @@ function discordDashboardPage(user, req = { query: {} }) {
   const remaining = isOwner ? 'Unlimited' : Math.max(0, Number(scriptQuota) - myScriptCount);
   const canEditSelected = selected && (selected.created_by === user.id || isOwner);
 
+  // Get stats
+  const totalScripts = db.prepare('SELECT COUNT(*) AS count FROM hosted_scripts').get().count;
+  const totalKeys = db.prepare('SELECT COUNT(*) AS count FROM licenses').get().count;
+  const totalLoads = db.prepare('SELECT COUNT(*) AS count FROM execution_logs').get().count;
+
   const scriptLinks = scripts.length
     ? scripts.map(s => `<a class="scriptLink ${selected?.id === s.id ? 'active' : ''}" href="/dashboard?tab=scripts&script=${s.id}"><b>${escapeHtml(s.name)}</b><small>${s.obfuscated ? 'Obfuscated' : 'Plain'} · ${escapeHtml(s.created_at)}</small></a>`).join('')
     : `<p class="muted pad">No scripts yet.</p>`;
 
   let content = '';
-  if (tab === 'scripts') {
-    content = selected ? `<div class="card"><div class="cardHead"><div><p class="eyebrow">Selected Script</p><h2>${escapeHtml(selected.name)}</h2><p class="muted">${selected.obfuscated ? 'Obfuscated build · edits auto re-obfuscate on save' : 'Plain build'} · ${escapeHtml(selected.created_at)}</p></div></div><h3>Loadstring</h3><code class="block">${makeLoaderSnippet(selected.id)}</code>${canEditSelected ? `<h3>Edit Script</h3><form method="post" action="/dashboard/scripts/${selected.id}/update"><label>Script name</label><input name="name" maxlength="80" value="${escapeHtml(selected.name)}" required><label>Actual Source</label><textarea name="code" maxlength="4000" required>${escapeHtml(selected.source_code || selected.code)}</textarea><label class="check"><input type="checkbox" name="obfuscate" value="true" ${selected.obfuscated ? 'checked' : ''}> Obfuscate on save</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><div class="buttonRow"><button type="submit">Save Permanently</button><button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate</button></div></form>` : `<p class="muted">This script is available as a loadstring. Source editing is limited to the owner/creator.</p>`}</div>` + `<div class="card"><p class="eyebrow">Add Script</p><h2>Permanent script upload</h2><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><button>Save Script</button></form></div>` : `<div class="card"><h2>Scripts</h2><p class="muted">Add your first script below. Scripts are saved permanently unless the owner removes them from the database.</p></div><div class="card"><p class="eyebrow">Add Script</p><h2>Permanent script upload</h2><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><button>Save Script</button></form></div>`;
-  } else if (tab === 'sources') {
-    content = `<div class="card"><p class="eyebrow">Sources</p><h2>Create a hosted script</h2><p class="muted">Upload a Lua or text file, or paste source manually. Obfuscation can run before hosting.</p><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><p class="hint">File contents will be placed into the source box below.</p><label>Source code</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("Karma Protection")' required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before hosting</label><label>Obfuscation level</label><select name="level"><option value="light">Light</option><option value="standard" selected>Standard</option><option value="max">Maximum</option></select><div class="buttonRow"><button type="submit">Host Script</button><button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate Only</button></div></form></div>`;
+  
+  if (tab === 'overview') {
+    content = `
+      <div class="card heroCard">
+        <p class="eyebrow">Overview</p>
+        <h2>Dashboard</h2>
+        <p class="muted">Manage scripts, obfuscation, Discord integration, and keys from one clean dashboard.</p>
+        <div class="stats">
+          <div class="stat"><div class="num">${totalScripts}</div><span>Scripts</span></div>
+          <div class="stat"><div class="num">${totalKeys}</div><span>Keys</span></div>
+          <div class="stat"><div class="num">${totalLoads}</div><span>Loads</span></div>
+        </div>
+        <div class="anime"></div>
+      </div>
+      <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div class="stat-card card px-5 py-4">
+          <p class="kf-label">Scripts</p>
+          <p class="mt-2 font-display text-3xl font-semibold tabular-nums text-accent">${totalScripts}</p>
+        </div>
+        <div class="stat-card card px-5 py-4">
+          <p class="kf-label">Keys</p>
+          <p class="mt-2 font-display text-3xl font-semibold tabular-nums text-txt">${totalKeys}</p>
+        </div>
+        <div class="stat-card card px-5 py-4">
+          <p class="kf-label">Loads</p>
+          <p class="mt-2 font-display text-3xl font-semibold tabular-nums text-txt">${totalLoads}</p>
+        </div>
+        <div class="stat-card card px-5 py-4">
+          <p class="kf-label">Projects</p>
+          <p class="mt-2 font-display text-3xl font-semibold tabular-nums text-txt">${myScriptCount}</p>
+        </div>
+      </div>
+      <div class="filter-bar">
+        <a href="/dashboard?tab=scripts">Scripts</a>
+        <a href="/dashboard?tab=keys">Keys</a>
+        <a href="/dashboard?tab=obfuscate">Obfuscate</a>
+        <a href="/dashboard?tab=discord">Discord</a>
+      </div>
+    `;
+  } else if (tab === 'scripts') {
+    content = selected ? `
+      <div class="card"><div class="cardHead"><div><p class="eyebrow">Selected Script</p><h2>${escapeHtml(selected.name)}</h2><p class="muted">${selected.obfuscated ? 'Obfuscated build · edits auto re-obfuscate on save' : 'Plain build'} · ${escapeHtml(selected.created_at)}</p></div></div>
+      <h3>Loadstring</h3><code class="block">${makeLoaderSnippet(selected.id)}</code>
+      ${canEditSelected ? `
+        <h3>Edit Script</h3>
+        <form method="post" action="/dashboard/scripts/${selected.id}/update">
+          <label>Script name</label>
+          <input name="name" maxlength="80" value="${escapeHtml(selected.name)}" required>
+          <label>Actual Source</label>
+          <textarea name="code" maxlength="4000" required>${escapeHtml(selected.source_code || selected.code)}</textarea>
+          <label class="check"><input type="checkbox" name="obfuscate" value="true" ${selected.obfuscated ? 'checked' : ''}> Obfuscate on save</label>
+          <label>Obfuscation level</label>
+          <select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select>
+          <div class="buttonRow"><button type="submit">Save Permanently</button>
+          <button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate</button></div>
+        </form>
+      ` : `<p class="muted">This script is available as a loadstring. Source editing is limited to the owner/creator.</p>`}
+      </div>
+      <div class="card"><p class="eyebrow">Add Script</p><h2>Permanent script upload</h2>
+      <form method="post" action="/dashboard/scripts">
+        <label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required>
+        <label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain">
+        <label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea>
+        <label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label>
+        <label>Obfuscation level</label>
+        <select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select>
+        <button>Save Script</button>
+      </form></div>
+    ` : `<div class="card"><h2>Scripts</h2><p class="muted">Add your first script below. Scripts are saved permanently unless the owner removes them from the database.</p></div>
+      <div class="card"><p class="eyebrow">Add Script</p><h2>Permanent script upload</h2>
+      <form method="post" action="/dashboard/scripts">
+        <label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required>
+        <label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain">
+        <label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea>
+        <label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label>
+        <label>Obfuscation level</label>
+        <select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select>
+        <button>Save Script</button>
+      </form></div>`;
   } else if (tab === 'keys') {
     const projects = db.prepare('SELECT id, name, created_at FROM scripts WHERE created_by = ? ORDER BY created_at DESC').all(user.id);
     const keys = db.prepare('SELECT l.*, s.name AS script_name FROM licenses l JOIN scripts s ON s.id = l.script_id WHERE l.created_by = ? ORDER BY l.created_at DESC LIMIT 50').all(user.id);
-    content = `<div class="card"><p class="eyebrow">Keys</p><h2>Generate keys for projects</h2><p class="muted">Create whitelist keys for any project you own.</p><form method="post" action="/dashboard/keys"><label>Project</label><select name="script_id">${projects.map(pr=>`<option value="${escapeHtml(pr.id)}">${escapeHtml(pr.name)} · ${escapeHtml(pr.id)}</option>`).join('')}</select><label>Days</label><input name="days" type="number" value="30" min="0" max="3650"><label>Quantity</label><input name="quantity" type="number" value="1" min="1" max="20"><button>Generate Keys</button></form><h3>Recent Keys</h3>${keys.map(k=>`<div class="row"><b>${escapeHtml(k.license_key)}</b><small>${escapeHtml(k.script_name)} · ${k.expires_at || 'Lifetime'} · ${k.revoked ? 'Revoked' : 'Active'}</small></div>`).join('') || '<p class="muted">No keys yet.</p>'}</div>`;
+    content = `
+      <div class="card"><p class="eyebrow">Keys</p><h2>Generate keys for projects</h2>
+      <p class="muted">Create whitelist keys for any project you own.</p>
+      <form method="post" action="/dashboard/keys">
+        <label>Project</label>
+        <select name="script_id">${projects.map(pr=>`<option value="${escapeHtml(pr.id)}">${escapeHtml(pr.name)} · ${escapeHtml(pr.id)}</option>`).join('')}</select>
+        <label>Days</label><input name="days" type="number" value="30" min="0" max="3650">
+        <label>Quantity</label><input name="quantity" type="number" value="1" min="1" max="20">
+        <button>Generate Keys</button>
+      </form>
+      <h3>Recent Keys</h3>
+      ${keys.map(k=>`<div class="row"><b>${escapeHtml(k.license_key)}</b><small>${escapeHtml(k.script_name)} · ${k.expires_at || 'Lifetime'} · ${k.revoked ? 'Revoked' : 'Active'}</small></div>`).join('') || '<p class="muted">No keys yet.</p>'}
+      </div>`;
+  } else if (tab === 'obfuscate') {
+    content = `
+      <div class="card"><p class="eyebrow">Obfuscator</p><h2>Protect Lua source</h2>
+      <p class="muted">Kers0ne-style protected wrapper with randomized locals, rolling XOR, checksum validation, and anti-tamper fallback.</p>
+      <form method="post" action="/dashboard/obfuscate">
+        <label>Filename</label><input name="filename" value="obfuscated.lua">
+        <label>Lua source</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("protect me")' required></textarea>
+        <label>Obfuscation level</label>
+        <select name="level"><option value="light">Light</option><option value="standard" selected>Standard</option><option value="max">Maximum</option></select>
+        <div class="buttonRow"><button type="submit">Obfuscate</button>
+        <a class="btn dark" href="/dashboard?tab=scripts">Scripts</a></div>
+      </form>
+      <div class="featureGrid">
+        <div>Anti-tamper checksum</div>
+        <div>Anti-Dump Hardening on new builds</div>
+        <div>Rolling XOR byte encoding</div>
+        <div>Decoy layer for automated dumps</div>
+        <div>Random local names</div>
+        <div>Protected output banner</div>
+      </div></div>`;
+  } else if (tab === 'how') {
+    content = `
+      <div class="card"><p class="eyebrow">How It Works</p><h2>Complete workflow</h2>
+      <div class="stepsDash">
+        <div><span>1</span><b>Upload source</b><p>Go to Scripts and upload a Lua file or paste code.</p></div>
+        <div><span>2</span><b>Obfuscate or host</b><p>Enable obfuscation and create a hosted loadstring.</p></div>
+        <div><span>3</span><b>Link Discord</b><p>Run <code>/link api key:${apiKey}</code> in your server.</p></div>
+        <div><span>4</span><b>Generate keys</b><p>Use <code>/generatekey</code> and the panel for buyers.</p></div>
+      </div></div>`;
+  } else if (tab === 'redeem') {
+    content = `
+      <div class="card"><p class="eyebrow">Redeem</p><h2>Redeem access code</h2>
+      <p class="muted">Paste a premium or access code you received.</p>
+      <form method="post" action="/redeem">
+        <input name="code" placeholder="XXXX-XXXX-XXXX" required>
+        <button type="submit">Redeem</button>
+      </form></div>`;
+  } else if (tab === 'discord') {
+    content = `
+      <div class="card"><p class="eyebrow">Discord</p><h2>Connect your server</h2>
+      <p class="muted">Add the bot to your server, then link your dashboard API key.</p>
+      <a class="btn" href="${botInvite}">Add Discord Bot To Server</a>
+      <h3>Link API</h3><code class="block">/link api key:${apiKey}</code>
+      <p class="muted">Run this in Discord to connect the server to the website.</p></div>`;
+  } else if (tab === 'settings') {
+    const dbUser = db.prepare('SELECT * FROM website_users WHERE id = ?').get(user.id) || {};
+    const displayName = dbUser.display_username || user.username || '';
+    content = `
+      <div class="card"><p class="eyebrow">Settings</p><h2>Account settings</h2>
+      <form method="post" action="/dashboard/settings">
+        <label>Username</label>
+        <input name="display_username" minlength="3" maxlength="24" pattern="[A-Za-z0-9]{3,24}" value="${escapeHtml(displayName)}" required>
+        <p class="hint">Usernames can only be 3–24 letters or numbers.</p>
+        <label class="check"><input type="checkbox" name="twofa_enabled" value="true" ${dbUser.twofa_enabled ? 'checked' : ''}> Enable two factor authentication</label>
+        <button type="submit">Save Settings</button>
+      </form></div>`;
+  } else if (tab === 'owner' && isOwner) {
+    const codes = db.prepare('SELECT * FROM premium_codes ORDER BY created_at DESC LIMIT 50').all();
+    const banned = db.prepare('SELECT * FROM banned_hwids ORDER BY created_at DESC LIMIT 50').all();
+    content = `
+      <div class="card"><p class="eyebrow">Owner Only</p><h2>Owner panel</h2>
+      <div class="stats">
+        <div class="stat"><div class="num">${scripts.length}</div><span>Total scripts</span></div>
+        <div class="stat"><div class="num">${banned.length}</div><span>Banned HWIDs</span></div>
+        <div class="stat"><div class="num">5</div><span>Default script limit</span></div>
+      </div>
+      <h3>Create premium code</h3>
+      <form method="post" action="/owner/codes">
+        <input name="code" placeholder="PREMIUM-KEY-123" required>
+        <input name="plan" placeholder="premium" value="premium">
+        <button>Create Code</button>
+      </form>
+      <h3>Ban HWID</h3>
+      <form method="post" action="/owner/ban-hwid">
+        <input name="hwid" placeholder="HWID" required>
+        <input name="reason" placeholder="Reason">
+        <button class="danger">Ban HWID</button>
+      </form>
+      <h3>Add script to user</h3>
+      <form method="post" action="/owner/add-user-script">
+        <input name="user_id" placeholder="Discord user ID" required>
+        <input name="name" placeholder="Script name" required>
+        <textarea name="code" maxlength="4000" placeholder="Lua source" required></textarea>
+        <label>Obfuscation level</label>
+        <select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select>
+        <label class="check"><input type="checkbox" name="obfuscate" value="true" checked> Obfuscate before assigning</label>
+        <button>Add Script To User</button>
+      </form>
+      <h3>Manage user access</h3>
+      <form method="post" action="/owner/user-plan" class="inlineForm">
+        <input name="user_id" placeholder="Discord user ID" required>
+        <select name="plan"><option value="free">free</option><option value="premium">premium</option><option value="royal">royal</option><option value="banned">banned</option></select>
+        <input name="script_quota" type="number" min="0" max="10000" value="5" style="width:120px">
+        <button>Set Access</button>
+      </form>
+      <h3>Premium codes</h3>
+      ${codes.map(c=>`<div class="row"><b>${escapeHtml(c.code)}</b><small>${escapeHtml(c.plan)} · redeemed by ${escapeHtml(c.redeemed_by||'nobody')}</small></div>`).join('')}
+      </div>`;
   } else if (tab === 'storage') {
     if (!isOwner) {
       content = `<div class="card"><h2>Script Storage</h2><p class="muted">Only the owner can access global storage.</p></div>`;
     } else {
       const stored = db.prepare('SELECT * FROM hosted_scripts WHERE created_by = ? ORDER BY created_at DESC LIMIT 500').all(OWNER_ID);
-      content = `<div class="card"><p class="eyebrow">Owner Storage</p><h2>Script Storage</h2><p class="muted">Owner account has unlimited scripts. Add global scripts here and use them in panels/loadstrings.</p><form method="post" action="/owner/storage"><label>Name</label><input name="name" maxlength="80" required><label>Source</label><textarea name="code" maxlength="4000" required></textarea><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><label class="check"><input type="checkbox" name="obfuscate" value="true" checked> Obfuscate before storing</label><button>Add Stored Script</button></form><h3>Stored Scripts</h3>${stored.map(r=>`<div class="row"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.id)} · ${r.obfuscated ? 'Obfuscated' : 'Plain'}</small><code class="block">${makeLoaderSnippet(r.id)}</code></div>`).join('') || '<p class="muted">No stored scripts.</p>'}</div>`;
+      content = `
+        <div class="card"><p class="eyebrow">Owner Storage</p><h2>Script Storage</h2>
+        <p class="muted">Owner account has unlimited scripts. Add global scripts here and use them in panels/loadstrings.</p>
+        <form method="post" action="/owner/storage">
+          <label>Name</label><input name="name" maxlength="80" required>
+          <label>Source</label><textarea name="code" maxlength="4000" required></textarea>
+          <label>Obfuscation level</label>
+          <select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select>
+          <label class="check"><input type="checkbox" name="obfuscate" value="true" checked> Obfuscate before storing</label>
+          <button>Add Stored Script</button>
+        </form>
+        <h3>Stored Scripts</h3>
+        ${stored.map(r=>`<div class="row"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.id)} · ${r.obfuscated ? 'Obfuscated' : 'Plain'}</small><code class="block">${makeLoaderSnippet(r.id)}</code></div>`).join('') || '<p class="muted">No stored scripts.</p>'}
+        </div>`;
     }
-  } else if (tab === 'obfuscate') {
-    content = `<div class="card"><p class="eyebrow">Obfuscator</p><h2>Protect Lua source</h2><p class="muted">Kers0ne-style protected wrapper with randomized locals, rolling XOR, checksum validation, and anti-tamper fallback.</p><form method="post" action="/dashboard/obfuscate"><label>Filename</label><input name="filename" value="obfuscated.lua"><label>Lua source</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("protect me")' required></textarea><label>Obfuscation level</label><select name="level"><option value="light">Light</option><option value="standard" selected>Standard</option><option value="max">Maximum</option></select><div class="buttonRow"><button type="submit">Obfuscate</button><a class="btn dark" href="/dashboard?tab=scripts">Scripts</a></div></form><div class="featureGrid"><div>Anti-tamper checksum</div><div>Anti-Dump Hardening on new builds</div><div>Rolling XOR byte encoding</div><div>Decoy layer for automated dumps</div><div>Random local names</div><div>Protected output banner</div></div></div>`;
-  } else if (tab === 'how') {
-    content = `<div class="card"><p class="eyebrow">How It Works</p><h2>Complete workflow</h2><div class="stepsDash"><div><span>1</span><b>Upload source</b><p>Go to Sources and upload a Lua file or paste code.</p></div><div><span>2</span><b>Obfuscate or host</b><p>Enable obfuscation and create a hosted loadstring.</p></div><div><span>3</span><b>Link Discord</b><p>Run <code>/link api key:${apiKey}</code> in your server.</p></div><div><span>4</span><b>Generate keys</b><p>Use <code>/generatekey</code> and the panel for buyers.</p></div></div></div>`;
-  } else if (tab === 'tutorials') {
-    content = `<div class="card"><p class="eyebrow">Tutorials</p><h2>Quick tutorials</h2><h3>Bot setup</h3><p class="muted">Invite the bot, then run <code>/setup panel title:Your Hub description:Use buttons below</code>.</p><h3>Script upload</h3><p class="muted">Open Sources, upload your Lua file, optionally obfuscate, and copy the loadstring from Scripts.</p><h3>Premium/redeem</h3><p class="muted">Give customers a code from the Owner panel. They redeem it on the Redeem page.</p></div>`;
-  } else if (tab === 'redeem') {
-    content = `<div class="card"><p class="eyebrow">Redeem</p><h2>Redeem access code</h2><p class="muted">Paste a premium or access code you received.</p><form method="post" action="/redeem"><input name="code" placeholder="XXXX-XXXX-XXXX" required><button type="submit">Redeem</button></form></div>`;
-  } else if (tab === 'discord') {
-    content = `<div class="card"><p class="eyebrow">Discord</p><h2>Connect your server</h2><p class="muted">Add the bot to your server, then link your dashboard API key.</p><a class="btn" href="${botInvite}">Add Discord Bot To Server</a><h3>Link API</h3><code class="block">/link api key:${apiKey}</code><p class="muted">Run this in Discord to connect the server to the website.</p></div>`;
-  } else if (tab === 'settings') {
-    const dbUser = db.prepare('SELECT * FROM website_users WHERE id = ?').get(user.id) || {};
-    const displayName = dbUser.display_username || user.username || '';
-    content = `<div class="card"><p class="eyebrow">Settings</p><h2>Account settings</h2><form method="post" action="/dashboard/settings"><label>Username</label><input name="display_username" minlength="3" maxlength="24" pattern="[A-Za-z0-9]{3,24}" value="${escapeHtml(displayName)}" required><p class="hint">Usernames can only be 3–24 letters or numbers.</p><label class="check"><input type="checkbox" name="twofa_enabled" value="true" ${dbUser.twofa_enabled ? 'checked' : ''}> Enable two factor authentication</label><p class="hint">This adds a dashboard 2FA setting flag. Connect a real authenticator provider later if you want enforced OTP challenges.</p><button type="submit">Save Settings</button></form></div>`;
-  } else if (tab === 'owner' && isOwner) {
-    const codes = db.prepare('SELECT * FROM premium_codes ORDER BY created_at DESC LIMIT 50').all();
-    const banned = db.prepare('SELECT * FROM banned_hwids ORDER BY created_at DESC LIMIT 50').all();
-    content = `<div class="card"><p class="eyebrow">Owner Only</p><h2>Owner panel</h2><div class="stats"><div class="stat"><div class="num">${scripts.length}</div><span>Total scripts</span></div><div class="stat"><div class="num">${banned.length}</div><span>Banned HWIDs</span></div><div class="stat"><div class="num">5</div><span>Default script limit</span></div></div><h3>Create premium code</h3><form method="post" action="/owner/codes"><input name="code" placeholder="PREMIUM-KEY-123" required><input name="plan" placeholder="premium" value="premium"><button>Create Code</button></form><h3>Ban HWID</h3><form method="post" action="/owner/ban-hwid"><input name="hwid" placeholder="HWID" required><input name="reason" placeholder="Reason"><button class="danger">Ban HWID</button></form><h3>Add script to user</h3><form method="post" action="/owner/add-user-script"><input name="user_id" placeholder="Discord user ID" required><input name="name" placeholder="Script name" required><textarea name="code" maxlength="4000" placeholder="Lua source" required></textarea><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><label class="check"><input type="checkbox" name="obfuscate" value="true" checked> Obfuscate before assigning</label><button>Add Script To User</button></form><h3>Manage user access</h3><form method="post" action="/owner/user-plan" class="inlineForm"><input name="user_id" placeholder="Discord user ID" required><select name="plan"><option value="free">free</option><option value="premium">premium</option><option value="royal">royal</option><option value="banned">banned</option></select><input name="script_quota" type="number" min="0" max="10000" value="5" style="width:120px"><button>Set Access</button></form><p class="muted">Website user list is hidden. Enter a Discord ID to add or update that user.</p><h3>Premium codes</h3>${codes.map(c=>`<div class="row"><b>${escapeHtml(c.code)}</b><small>${escapeHtml(c.plan)} · redeemed by ${escapeHtml(c.redeemed_by||'nobody')}</small></div>`).join('')}</div>`;
-  } else {
-    content = `<div class="card heroCard"><p class="eyebrow">Overview</p><h2>Dashboard</h2><p class="muted">Manage scripts, sources, obfuscation, tutorials, Discord links, redeem codes, and owner tools from one clean dashboard.</p><div class="stats"><div class="stat"><div class="num">${scripts.length}</div><span>Scripts used</span></div><div class="stat"><div class="num">${remaining}</div><span>Slots left</span></div><div class="stat"><div class="num">${scriptQuota}</div><span>Max scripts</span></div></div><div class="anime"></div></div>`;
   }
 
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma Dashboard</title><style>:root{--bg:#000000;--shell:rgba(11,11,12,0.9);--panel:rgba(16,16,17,0.8);--panel2:rgba(21,21,22,0.8);--line:rgba(212,175,55,0.25);--muted:#a1a1aa;--text:#f8fafc;--gold:#d4af37;--gold2:#f1d592}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:linear-gradient(rgba(0,0,0,0.75),rgba(0,0,0,0.75)),url("/assets/bg.png") center/cover fixed no-repeat,#000000;color:var(--text);font-family:"SF Pro Display","Aptos","Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.01em}body:before{content:'';position:fixed;right:-140px;bottom:-140px;width:560px;height:560px;background:url('/assets/karma-logo.png') center/contain no-repeat;opacity:.045;filter:grayscale(1);pointer-events:none}a{color:inherit;text-decoration:none}.page{padding:28px}.shell{max-width:1500px;margin:0 auto;min-height:calc(100vh - 56px);display:grid;grid-template-columns:280px 270px 1fr;border:1px solid rgba(212,175,55,0.4);border-radius:34px;overflow:hidden;background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.015));box-shadow:0 34px 140px rgba(0,0,0,.58),0 0 0 1px rgba(255,255,255,.025)}.side{background:linear-gradient(180deg,rgba(12,12,12,.96),rgba(5,5,5,.96));border-right:1px solid rgba(255,255,255,.20);padding:22px;overflow:auto;box-shadow:18px 0 80px rgba(0,0,0,.28)}.brand{display:flex;gap:12px;align-items:center;border-bottom:1px solid #242427;padding-bottom:20px}.brand img,.avatar{width:48px;height:48px;border-radius:16px;object-fit:cover;border:1px solid rgba(212,175,55,0.6);box-shadow:0 0 35px rgba(212,175,55,0.3)}.brand b{display:block;font-size:18px;font-weight:850}.brand small,.muted,small{color:var(--muted)}.nav{margin-top:20px}.nav a{display:flex;align-items:center;padding:12px 13px;border-radius:14px;color:#d4d4d8;font-weight:720;margin-bottom:4px}.nav a:hover,.nav a.active{background:linear-gradient(90deg,rgba(255,255,255,.18),rgba(255,255,255,.035));color:#fff;box-shadow:inset 3px 0 0 var(--gold)}.scriptsPane{background:rgba(7,7,7,.78);border-right:1px solid rgba(255,255,255,.16);padding:20px;overflow:auto}.scriptLink{display:block;border:1px solid rgba(255,255,255,.14);background:rgba(14,14,14,.86);border-radius:16px;padding:13px;margin-bottom:10px}.scriptLink.active{border-color:var(--gold);background:linear-gradient(180deg,rgba(255,255,255,.14),rgba(18,18,18,.88));box-shadow:0 10px 34px rgba(255,255,255,.08)}.main{padding:28px;min-width:0;position:relative;overflow:hidden}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.profile{display:flex;gap:12px;align-items:center}.card{border:1px solid rgba(255,255,255,.16);border-radius:28px;background:linear-gradient(180deg,rgba(24,24,24,.92),rgba(8,8,8,.97));padding:28px;box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 26px 90px rgba(0,0,0,.32);margin-bottom:18px;position:relative;z-index:1}.card h2{font-size:clamp(32px,4vw,56px);line-height:.95;letter-spacing:-.06em;margin:6px 0 12px}.eyebrow{color:#a1a1aa;text-transform:uppercase;letter-spacing:.18em;font-size:12px;font-weight:850;margin:0 0 8px}.btn,button{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--gold2);background:linear-gradient(180deg,var(--gold2),var(--gold));color:#000;border-radius:999px;padding:12px 18px;font-weight:950;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;box-shadow:0 12px 38px rgba(255,255,255,.16)}.btn:hover,button:hover{transform:translateY(-1px);box-shadow:0 14px 42px rgba(255,255,255,.10)}.btn.dark{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32);box-shadow:none}.secondary{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32)}.buttonRow{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:6px}.danger{background:#220f0f;color:#ffb4ad;border-color:#5b2521}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}.stat{border:1px solid rgba(255,255,255,.14);border-radius:18px;background:rgba(10,10,10,.82);padding:18px}.num{font-size:38px;font-weight:900;letter-spacing:-.05em}select{background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:10px;font:inherit}.inlineForm{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}input,textarea{width:100%;background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:12px;margin:8px 0 14px;font:inherit}textarea{min-height:260px}.check{display:flex;gap:10px;align-items:center}.check input{width:auto}.block{display:block;white-space:pre-wrap;word-break:break-all;padding:12px;margin:10px 0;background:#080809;border:1px solid #343438;border-radius:14px}.row{border:1px solid #27272a;border-radius:14px;padding:12px;margin:8px 0;background:#0b0b0c}.featureGrid,.stepsDash{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:16px}.featureGrid div,.stepsDash div{border:1px solid #27272a;border-radius:16px;background:#0b0b0c;padding:16px}.stepsDash span{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#fff;color:#000;font-weight:900}.anime{height:220px;border-radius:24px;border:1px solid #27272a;margin-top:22px;background:radial-gradient(circle at 30% 50%,rgba(255,255,255,.18),transparent 18%),radial-gradient(circle at 70% 50%,rgba(255,255,255,.11),transparent 20%),linear-gradient(120deg,#000,#111,#000);background-size:160% 160%;animation:movebg 6s infinite alternate;position:relative;overflow:hidden}.anime:after{content:'';position:absolute;inset:-40%;background:conic-gradient(from 0deg,transparent,rgba(255,255,255,.12),transparent 35%);animation:spin 8s linear infinite}@keyframes movebg{to{background-position:100% 60%}}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:1100px){.page{padding:12px}.shell{grid-template-columns:1fr;border-radius:22px}.side,.scriptsPane{border-right:0;border-bottom:1px solid var(--line)}.stats,.featureGrid,.stepsDash{grid-template-columns:1fr}.top{align-items:flex-start;gap:16px;flex-direction:column}}</style></head><body><div class="page"><div class="shell"><aside class="side"><div class="brand"><img src="/assets/karma-logo.png"><div><b>Karma Protection</b><small>${username}</small></div></div><nav class="nav"><a class="${tab==='overview'?'active':''}" href="/dashboard">Overview</a><a class="${tab==='scripts'?'active':''}" href="/dashboard?tab=scripts">Scripts</a><a class="${tab==='obfuscate'?'active':''}" href="/dashboard?tab=obfuscate">Obfuscate</a>${isOwner?`<a class="${tab==='owner'?'active':''}" href="/dashboard?tab=owner">Owner Panel</a>`:''}<a href="/logout">Logout</a></nav></aside><aside class="scriptsPane"><h3>Scripts</h3>${scriptLinks}<a class="btn" href="/dashboard?tab=scripts">New Script</a></aside><main class="main"><div class="top"><div class="profile"><img class="avatar" src="${avatar}"><div><b>${username}</b><br><small>${myScriptCount}/${scriptQuota} scripts used</small></div></div><div class="buttonRow"><a class="btn dark" href="/dashboard?tab=obfuscate">Obfuscator</a><a class="btn dark" href="/">Home</a></div></div>${content}</main></div></div><script>document.getElementById('fileInput')?.addEventListener('change', async e => { const f=e.target.files[0]; if(!f) return; document.querySelector('input[name="name"]').value ||= f.name.replace(/\.(lua|txt)$/i,''); document.getElementById('codeBox').value = await f.text(); });</script></body></html>`;
+  return `<!doctype html>
+<html lang="en" data-theme="violet" data-appearance="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Karma Protection — protect & deliver scripts</title>
+  <meta name="description" content="Upload a script, lock it with keys, share a loader. Discord panels included." />
+  <link rel="icon" href="/assets/karma-logo.png" />
+  <style>
+    :root {
+      --bg: #030303;
+      --surface: rgba(15,15,16,0.85);
+      --surface-2: rgba(25,25,28,0.7);
+      --muted: #a1a1aa;
+      --stroke: rgba(255,255,255,0.08);
+      --stroke-hi: rgba(255,255,255,0.18);
+      --text: #f8fafc;
+      --text-2: #d4d4d8;
+      --text-3: #a1a1aa;
+      --accent: #d4af37;
+      --accent-hover: #e3c94a;
+      --green: #4ade80;
+      --red: #f87171;
+      --gold: #d4af37;
+      --gold2: #f1d592;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(rgba(0,0,0,0.85), rgba(0,0,0,0.85)), 
+                  radial-gradient(circle at 20% 30%, rgba(212,175,55,0.06), transparent 40%),
+                  radial-gradient(circle at 80% 70%, rgba(212,175,55,0.04), transparent 35%),
+                  #030303;
+      color: var(--text);
+      font-family: "SF Pro Display", "Aptos", "Segoe UI Variable", "Segoe UI", Inter, system-ui, sans-serif;
+      letter-spacing: -0.01em;
+    }
+    a { color: inherit; text-decoration: none; }
+    .container { width: min(1400px, 96%); margin: 0 auto; padding: 0 16px; }
+    
+    /* KeyForge-style header */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--stroke);
+      background: rgba(3,3,3,0.92);
+      backdrop-filter: blur(12px);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+    .topbar .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 780;
+    }
+    .topbar .brand img {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      border: 1px solid rgba(212,175,55,0.4);
+    }
+    .topbar .brand span {
+      font-size: 18px;
+    }
+    .topbar .brand small {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 400;
+    }
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(212,175,55,0.3);
+      background: rgba(255,255,255,0.05);
+      padding: 8px 16px;
+      border-radius: 999px;
+      font-weight: 700;
+      font-size: 13px;
+      color: var(--text);
+      cursor: pointer;
+      transition: 0.2s;
+    }
+    .btn:hover {
+      border-color: var(--gold);
+      background: rgba(212,175,55,0.12);
+    }
+    .btn-accent {
+      background: linear-gradient(180deg, var(--gold2), var(--gold));
+      color: #000;
+      border-color: var(--gold);
+    }
+    .btn-accent:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 30px rgba(212,175,55,0.25);
+    }
+    .btn-dark {
+      background: rgba(10,10,10,0.8);
+      color: #fff;
+      border-color: rgba(255,255,255,0.2);
+    }
+    .btn-danger {
+      background: #220f0f;
+      color: #ffb4ad;
+      border-color: #5b2521;
+    }
+    
+    /* Dashboard layout */
+    .dashboard {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: 0;
+      min-height: calc(100vh - 68px);
+    }
+    .sidebar {
+      background: rgba(8,8,8,0.95);
+      border-right: 1px solid var(--stroke);
+      padding: 20px 12px;
+      overflow-y: auto;
+      position: sticky;
+      top: 68px;
+      height: calc(100vh - 68px);
+    }
+    .sidebar .nav-link {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      color: var(--text-2);
+      font-weight: 600;
+      font-size: 14px;
+      transition: 0.15s;
+      margin-bottom: 2px;
+    }
+    .sidebar .nav-link:hover {
+      background: rgba(255,255,255,0.06);
+      color: #fff;
+    }
+    .sidebar .nav-link.active {
+      background: rgba(212,175,55,0.15);
+      color: var(--gold);
+    }
+    .sidebar .nav-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--text-3);
+      padding: 12px 14px 6px;
+      font-weight: 700;
+    }
+    .sidebar .profile-card {
+      border-top: 1px solid var(--stroke);
+      margin-top: 16px;
+      padding-top: 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+    }
+    .sidebar .profile-card .avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 1px solid var(--stroke);
+    }
+    .sidebar .profile-card .name {
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .sidebar .profile-card .plan {
+      font-size: 12px;
+      color: var(--text-3);
+    }
+    
+    .main-content {
+      padding: 24px 32px;
+      overflow-y: auto;
+    }
+    
+    /* Cards */
+    .card {
+      border: 1px solid var(--stroke);
+      border-radius: 20px;
+      background: var(--surface);
+      padding: 24px;
+      margin-bottom: 16px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.2);
+    }
+    .card h2 {
+      font-size: clamp(28px, 3.5vw, 44px);
+      line-height: 1.05;
+      letter-spacing: -0.04em;
+      margin: 4px 0 8px;
+    }
+    .card h3 {
+      font-size: 16px;
+      margin: 16px 0 8px;
+      font-weight: 700;
+    }
+    .eyebrow {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--text-3);
+      font-weight: 700;
+    }
+    .muted { color: var(--text-3); }
+    .pad { padding: 8px 0; }
+    
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .stat {
+      border: 1px solid var(--stroke);
+      border-radius: 14px;
+      background: var(--surface-2);
+      padding: 16px;
+    }
+    .stat .num {
+      font-size: 34px;
+      font-weight: 850;
+      letter-spacing: -0.04em;
+      color: var(--gold);
+    }
+    .stat span {
+      display: block;
+      font-size: 13px;
+      color: var(--text-3);
+      margin-top: 4px;
+    }
+    
+    .stat-card {
+      border: 1px solid var(--stroke);
+      border-radius: 16px;
+      background: var(--surface-2);
+      padding: 16px 20px;
+    }
+    .stat-card .kf-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-3);
+      font-weight: 600;
+    }
+    .stat-card .text-accent { color: var(--gold); }
+    .stat-card .text-txt { color: var(--text); }
+    .stat-card .text-green { color: var(--green); }
+    .stat-card .text-3xl { font-size: 30px; font-weight: 700; }
+    .stat-card .tabular-nums { font-feature-settings: "tnum"; }
+    
+    .grid { display: grid; gap: 12px; }
+    .grid-cols-2 { grid-template-columns: 1fr 1fr; }
+    .gap-3 { gap: 12px; }
+    @media (min-width: 1024px) {
+      .lg\\:grid-cols-4 { grid-template-columns: repeat(4, 1fr); }
+    }
+    
+    .filter-bar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    .filter-bar a {
+      padding: 6px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--stroke);
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-2);
+      transition: 0.15s;
+    }
+    .filter-bar a:hover {
+      border-color: var(--gold);
+      color: var(--text);
+    }
+    
+    input, textarea, select {
+      width: 100%;
+      background: rgba(8,8,9,0.9);
+      color: #fff;
+      border: 1px solid #343438;
+      border-radius: 12px;
+      padding: 10px 14px;
+      margin: 6px 0 12px;
+      font: inherit;
+    }
+    textarea { min-height: 120px; }
+    .check { display: flex; gap: 10px; align-items: center; }
+    .check input { width: auto; }
+    .block {
+      display: block;
+      white-space: pre-wrap;
+      word-break: break-all;
+      padding: 12px;
+      margin: 8px 0;
+      background: rgba(8,8,9,0.9);
+      border: 1px solid #343438;
+      border-radius: 12px;
+      font-family: monospace;
+      font-size: 13px;
+    }
+    .row {
+      border: 1px solid #27272a;
+      border-radius: 12px;
+      padding: 10px 14px;
+      margin: 6px 0;
+      background: rgba(11,11,12,0.6);
+    }
+    .buttonRow { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+    .inlineForm { display: flex; gap: 10px; flex-wrap: wrap; }
+    .inlineForm input, .inlineForm select { width: auto; flex: 1; min-width: 120px; }
+    
+    .featureGrid, .stepsDash {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .featureGrid div, .stepsDash div {
+      border: 1px solid #27272a;
+      border-radius: 14px;
+      background: rgba(11,11,12,0.6);
+      padding: 14px;
+    }
+    .stepsDash span {
+      display: inline-grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--gold);
+      color: #000;
+      font-weight: 900;
+      font-size: 14px;
+      margin-right: 8px;
+    }
+    .stepsDash b { display: inline-block; margin-top: 4px; }
+    .stepsDash p { font-size: 13px; color: var(--text-3); margin: 4px 0 0; }
+    
+    .anime {
+      height: 140px;
+      border-radius: 16px;
+      border: 1px solid #27272a;
+      margin-top: 16px;
+      background: radial-gradient(circle at 30% 50%, rgba(212,175,55,0.12), transparent 18%),
+                  radial-gradient(circle at 70% 50%, rgba(212,175,55,0.08), transparent 20%),
+                  linear-gradient(120deg, #000, #111, #000);
+      background-size: 160% 160%;
+      animation: movebg 6s infinite alternate;
+      position: relative;
+      overflow: hidden;
+    }
+    .anime:after {
+      content: '';
+      position: absolute;
+      inset: -40%;
+      background: conic-gradient(from 0deg, transparent, rgba(212,175,55,0.08), transparent 35%);
+      animation: spin 8s linear infinite;
+    }
+    @keyframes movebg { to { background-position: 100% 60%; } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    
+    .scriptLink {
+      display: block;
+      border: 1px solid var(--stroke);
+      background: rgba(14,14,14,0.8);
+      border-radius: 14px;
+      padding: 12px 14px;
+      margin-bottom: 8px;
+      transition: 0.15s;
+    }
+    .scriptLink:hover { border-color: var(--stroke-hi); }
+    .scriptLink.active {
+      border-color: var(--gold);
+      background: linear-gradient(180deg, rgba(212,175,55,0.12), rgba(18,18,18,0.9));
+    }
+    .scriptLink b { display: block; font-size: 15px; }
+    .scriptLink small { font-size: 12px; color: var(--text-3); }
+    
+    .logout-link {
+      color: var(--text-3);
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-radius: 12px;
+      font-weight: 600;
+      font-size: 14px;
+      transition: 0.15s;
+      margin-top: auto;
+    }
+    .logout-link:hover {
+      background: rgba(255,255,255,0.05);
+      color: #ffb4ad;
+    }
+    
+    @media (max-width: 900px) {
+      .dashboard { grid-template-columns: 1fr; }
+      .sidebar {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        height: 100vh;
+        width: 280px;
+        background: rgba(8,8,8,0.98);
+        border-right: 1px solid var(--stroke);
+        padding: 16px;
+      }
+      .sidebar.open { display: block; }
+      .main-content { padding: 16px; }
+      .topbar { padding: 10px 16px; }
+      .grid-cols-2 { grid-template-columns: 1fr; }
+      .stats { grid-template-columns: 1fr 1fr; }
+      .featureGrid, .stepsDash { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 500px) {
+      .stats { grid-template-columns: 1fr; }
+    }
+    
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #666; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="/assets/karma-logo.png" alt="Karma Protection">
+      <div>
+        <span>Karma Protection</span>
+        <small>protect & deliver</small>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button class="btn btn-dark" onclick="document.getElementById('sidebar').classList.toggle('open')" aria-label="Toggle menu">☰</button>
+      <a class="btn btn-dark" href="/logout">Sign out</a>
+    </div>
+  </header>
+  
+  <div class="dashboard">
+    <aside class="sidebar" id="sidebar">
+      <div class="nav-label">Workspace</div>
+      <a class="nav-link ${tab === 'overview' ? 'active' : ''}" href="/dashboard"><span>🏠</span> Home</a>
+      <a class="nav-link ${tab === 'scripts' ? 'active' : ''}" href="/dashboard?tab=scripts"><span>📄</span> Scripts</a>
+      <a class="nav-link ${tab === 'keys' ? 'active' : ''}" href="/dashboard?tab=keys"><span>🔑</span> Keys</a>
+      <a class="nav-link ${tab === 'how' ? 'active' : ''}" href="/dashboard?tab=how"><span>📖</span> Guide</a>
+      
+      <div class="nav-label">Tools</div>
+      <a class="nav-link ${tab === 'obfuscate' ? 'active' : ''}" href="/dashboard?tab=obfuscate"><span>⚙️</span> Obfuscator</a>
+      <a class="nav-link ${tab === 'discord' ? 'active' : ''}" href="/dashboard?tab=discord"><span>💬</span> Discord</a>
+      <a class="nav-link ${tab === 'redeem' ? 'active' : ''}" href="/dashboard?tab=redeem"><span>🎁</span> Redeem</a>
+      ${isOwner ? `<a class="nav-link ${tab === 'owner' ? 'active' : ''}" href="/dashboard?tab=owner"><span>👑</span> Owner Panel</a>` : ''}
+      <a class="nav-link ${tab === 'storage' ? 'active' : ''}" href="/dashboard?tab=storage"><span>💾</span> Storage</a>
+      <a class="nav-link ${tab === 'settings' ? 'active' : ''}" href="/dashboard?tab=settings"><span>⚡</span> Settings</a>
+      
+      <div class="profile-card">
+        <img class="avatar" src="${avatar}" alt="Avatar">
+        <div>
+          <div class="name">${username}</div>
+          <div class="plan">${myScriptCount} scripts</div>
+        </div>
+      </div>
+      <a class="logout-link" href="/logout">🚪 Sign out</a>
+    </aside>
+    
+    <main class="main-content">
+      ${content}
+    </main>
+  </div>
+  
+  <script>
+    // File upload handler
+    document.getElementById('fileInput')?.addEventListener('change', async e => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const nameInput = document.querySelector('input[name="name"]');
+      if (nameInput && !nameInput.value) {
+        nameInput.value = f.name.replace(/\\.(lua|txt)$/i, '');
+      }
+      const codeBox = document.getElementById('codeBox');
+      if (codeBox) codeBox.value = await f.text();
+    });
+    
+    // Close sidebar on outside click (mobile)
+    document.addEventListener('click', function(e) {
+      const sidebar = document.getElementById('sidebar');
+      if (window.innerWidth <= 900 && sidebar && sidebar.classList.contains('open')) {
+        if (!sidebar.contains(e.target) && !e.target.closest('.topbar-actions')) {
+          sidebar.classList.remove('open');
+        }
+      }
+    });
+  </script>
+</body>
+</html>`;
+}
+
+function makeUserApiKey(userId) {
+  const sig = crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(`api:${userId}`).digest('base64url').slice(0, 32);
+  return `ks_${userId}_${sig}`;
 }
 
 function makeSession(user) {
@@ -1602,7 +2238,6 @@ function requireDashboardUser(req, res) {
   return user;
 }
 
-
 function escapeHtml(value) {
   return String(value)
     .replaceAll('&', '&amp;')
@@ -1612,7 +2247,6 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
-
 // ---------------- Express API ----------------
 function startApiServer() {
   const app = express();
@@ -1620,7 +2254,23 @@ function startApiServer() {
   app.use(express.urlencoded({ extended: true, limit: '256kb' }));
   app.use('/assets', express.static('public'));
 
-  app.get('/', (req, res) => res.type('html').send(kolsecHomePage()));
+  app.get('/', (req, res) => {
+    // Simple landing page redirect to dashboard or login
+    const user = getSessionUser(req);
+    if (user) return res.redirect('/dashboard');
+    res.type('html').send(`
+      <!doctype html>
+      <html><head><title>Karma Protection</title>
+      <style>body{margin:0;background:#030303;color:#fff;font-family:system-ui;display:grid;place-items:center;min-height:100vh;text-align:center}.card{max-width:600px;padding:48px;border:1px solid #333;border-radius:28px;background:#0a0a0a}h1{font-size:48px;letter-spacing:-.04em}.gold{color:#d4af37}a{display:inline-block;margin-top:20px;padding:12px 28px;border:1px solid #d4af37;border-radius:999px;color:#fff;text-decoration:none;font-weight:700}a:hover{background:#d4af37;color:#000}</style>
+      </head><body>
+      <div class="card">
+        <h1>Karma <span class="gold">Protection</span></h1>
+        <p>Protect your Lua scripts with HWID-locked keys, obfuscation, and Discord integration.</p>
+        <a href="/login">Sign in with Discord</a>
+      </div>
+      </body></html>
+    `);
+  });
   app.get('/health', (req, res) => res.json({ ok: true, name: 'Karma Protection' }));
 
   app.get('/api/stats', (req, res) => {
@@ -1728,7 +2378,7 @@ function startApiServer() {
   app.get('/dashboard', (req, res) => {
     const user = requireDashboardUser(req, res);
     if (!user) return;
-    return res.type('html').send(discordDashboardPage(user, req));
+    return res.type('html').send(keyforgeDashboardPage(user, req));
   });
 
   app.post('/dashboard/scripts', async (req, res) => {
@@ -1809,12 +2459,6 @@ function startApiServer() {
     db.prepare('UPDATE website_users SET display_username = ?, twofa_enabled = ?, twofa_secret = ? WHERE id = ?')
       .run(display, twofa, secret, user.id);
     return res.redirect('/dashboard?tab=settings');
-  });
-
-  app.post('/dashboard/scripts/:id/delete', (req, res) => {
-    const user = requireDashboardUser(req, res);
-    if (!user) return;
-    return res.status(403).type('html').send('<h1>Delete disabled</h1><p>Scripts are permanent and cannot be deleted from the dashboard.</p><a href="/dashboard?tab=scripts">Back</a>');
   });
 
   app.post('/dashboard/obfuscate', async (req, res) => {
@@ -1926,7 +2570,6 @@ function startApiServer() {
     res.json({ ok: true, scripts: rows.map(r => ({ ...r, script_url: `${publicBaseUrl()}/script/${r.id}.lua`, loadstring_url: `${publicBaseUrl()}/loadstring/${r.id}` })) });
   });
 
-  
   app.post('/api/log-execution', (req, res) => {
     const { script_id, key, hwid, executor } = req.body || {};
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
@@ -1992,7 +2635,6 @@ function startApiServer() {
     return res.status(500).type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma Protection Error</title><style>body{margin:0;background:#000;color:#fff;font-family:system-ui;display:grid;place-items:center;min-height:100vh}.card{width:min(680px,92%);border:1px solid #333;border-radius:24px;background:#090909;padding:28px}a{color:#fff}</style></head><body><div class="card"><h1>Something went wrong</h1><p>The website hit an error instead of loading this page.</p><p>Try signing in again, or check Render logs for the exact error.</p><a href="/">Back home</a></div></body></html>`);
   });
 
-  // Render requires process.env.PORT for web services.
   const port = Number(process.env.PORT || process.env.API_PORT || 3000);
   app.listen(port, '0.0.0.0', () => console.log(`Web server listening on port ${port}`));
 }
