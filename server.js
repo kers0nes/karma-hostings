@@ -314,6 +314,7 @@ CREATE TABLE IF NOT EXISTS hosted_scripts (
   code TEXT NOT NULL,
   source_code TEXT,
   linked_script_id TEXT,
+  key_system_id TEXT,
   obfuscated INTEGER NOT NULL DEFAULT 0,
   created_by TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -374,6 +375,16 @@ CREATE TABLE IF NOT EXISTS banned_hwids (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS execution_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  script_id TEXT NOT NULL,
+  license_key TEXT,
+  hwid TEXT,
+  ip TEXT,
+  executor TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_scripts_guild ON scripts(guild_id);
 CREATE INDEX IF NOT EXISTS idx_licenses_script ON licenses(script_id);
 CREATE INDEX IF NOT EXISTS idx_licenses_user ON licenses(discord_user_id);
@@ -381,6 +392,7 @@ CREATE INDEX IF NOT EXISTS idx_hosted_scripts_guild ON hosted_scripts(guild_id);
 CREATE INDEX IF NOT EXISTS idx_hosted_scripts_user ON hosted_scripts(created_by);
 CREATE INDEX IF NOT EXISTS idx_hosted_scripts_linked ON hosted_scripts(linked_script_id);
 CREATE INDEX IF NOT EXISTS idx_premium_codes_redeemed_by ON premium_codes(redeemed_by);
+CREATE INDEX IF NOT EXISTS idx_execution_logs_script ON execution_logs(script_id);
 `);
 
 // Migrations for older Render SQLite databases.
@@ -402,7 +414,8 @@ for (const migration of [
   "ALTER TABLE website_users ADD COLUMN plan TEXT NOT NULL DEFAULT 'free'",
   "ALTER TABLE website_users ADD COLUMN script_quota INTEGER NOT NULL DEFAULT 5",
   "ALTER TABLE hosted_scripts ADD COLUMN source_code TEXT",
-  "ALTER TABLE hosted_scripts ADD COLUMN linked_script_id TEXT"
+  "ALTER TABLE hosted_scripts ADD COLUMN linked_script_id TEXT",
+  "ALTER TABLE hosted_scripts ADD COLUMN key_system_id TEXT"
 ]) {
   try { db.prepare(migration).run(); } catch (_) {}
 }
@@ -489,7 +502,7 @@ function createScript({ guildId, name, createdBy }) {
   return { id, name, apiSecret };
 }
 
-function createHostedScript({ guildId, name, code, sourceCode, linkedScriptId, obfuscated, createdBy }) {
+function createHostedScript({ guildId, name, code, sourceCode, linkedScriptId, keySystemId, obfuscated, createdBy }) {
   let id = makeId('host');
   const existing = linkedScriptId
     ? db.prepare('SELECT * FROM hosted_scripts WHERE guild_id = ? AND linked_script_id = ?').get(guildId, linkedScriptId)
@@ -499,19 +512,19 @@ function createHostedScript({ guildId, name, code, sourceCode, linkedScriptId, o
     id = existing.id;
     db.prepare(`
       UPDATE hosted_scripts
-      SET name = ?, code = ?, source_code = ?, linked_script_id = ?, obfuscated = ?, created_by = ?
+      SET name = ?, code = ?, source_code = ?, linked_script_id = ?, key_system_id = ?, obfuscated = ?, created_by = ?
       WHERE id = ?
-    `).run(name, code, sourceCode || code, linkedScriptId || null, obfuscated ? 1 : 0, createdBy, id);
+    `).run(name, code, sourceCode || code, linkedScriptId || null, keySystemId || null, obfuscated ? 1 : 0, createdBy, id);
   } else {
     db.prepare(`
-      INSERT INTO hosted_scripts (id, guild_id, name, code, source_code, linked_script_id, obfuscated, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, guildId, name, code, sourceCode || code, linkedScriptId || null, obfuscated ? 1 : 0, createdBy);
+      INSERT INTO hosted_scripts (id, guild_id, name, code, source_code, linked_script_id, key_system_id, obfuscated, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, guildId, name, code, sourceCode || code, linkedScriptId || null, keySystemId || null, obfuscated ? 1 : 0, createdBy);
   }
 
-  const script = { id, guild_id: guildId, name, code, source_code: sourceCode || code, linked_script_id: linkedScriptId || null, obfuscated: Boolean(obfuscated), created_by: createdBy };
+  const script = { id, guild_id: guildId, name, code, source_code: sourceCode || code, linked_script_id: linkedScriptId || null, key_system_id: keySystemId || null, obfuscated: Boolean(obfuscated), created_by: createdBy };
   saveHostedScriptToSupabase(script).catch(err => console.warn('Supabase save failed:', err.message));
-  return { id, name, code, source_code: sourceCode || code, linked_script_id: linkedScriptId || null, obfuscated: Boolean(obfuscated) };
+  return { id, name, code, source_code: sourceCode || code, linked_script_id: linkedScriptId || null, key_system_id: keySystemId || null, obfuscated: Boolean(obfuscated) };
 }
 
 function supabaseConfig() {
@@ -530,6 +543,7 @@ async function saveHostedScriptToSupabase(script) {
     code: script.code,
     source_code: script.source_code || script.code,
     linked_script_id: script.linked_script_id || null,
+    key_system_id: script.key_system_id || null,
     obfuscated: script.obfuscated ? 1 : 0,
     created_by: script.created_by
   };
@@ -556,19 +570,20 @@ async function hydrateHostedScriptsFromSupabase() {
   if (!res.ok) throw new Error(await res.text());
   const rows = await res.json();
   const stmt = db.prepare(`
-    INSERT INTO hosted_scripts (id, guild_id, name, code, source_code, linked_script_id, obfuscated, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO hosted_scripts (id, guild_id, name, code, source_code, linked_script_id, key_system_id, obfuscated, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       guild_id=excluded.guild_id,
       name=excluded.name,
       code=excluded.code,
       source_code=excluded.source_code,
       linked_script_id=excluded.linked_script_id,
+      key_system_id=excluded.key_system_id,
       obfuscated=excluded.obfuscated,
       created_by=excluded.created_by
   `);
   for (const r of rows) {
-    stmt.run(r.id, r.guild_id || 'web', r.name || r.id, r.code || '', r.source_code || r.code || '', r.linked_script_id || null, r.obfuscated ? 1 : 0, r.created_by || 'unknown');
+    stmt.run(r.id, r.guild_id || 'web', r.name || r.id, r.code || '', r.source_code || r.code || '', r.linked_script_id || null, r.key_system_id || null, r.obfuscated ? 1 : 0, r.created_by || 'unknown');
   }
   console.log(`Hydrated ${rows.length} hosted scripts from Supabase.`);
 }
@@ -580,7 +595,8 @@ function publicBaseUrl() {
 }
 
 function makeLoaderSnippet(scriptId) {
-  return `loadstring(game:HttpGet("${publicBaseUrl()}/loadstring/${scriptId}"))()`;
+  const baseUrl = publicBaseUrl();
+  return `getgenv().SCRIPT_KEY = "KEYLESS" loadstring(game:HttpGet("${baseUrl}/api/v1/luascripts/public/${scriptId}/download"))()`;
 }
 
 function makeProtectedLoader(rawUrl) {
@@ -1454,7 +1470,7 @@ function discordDashboardPage(user, req = { query: {} }) {
 
   let content = '';
   if (tab === 'scripts') {
-    content = selected ? `<div class="card"><div class="cardHead"><div><p class="eyebrow">Selected Script</p><h2>${escapeHtml(selected.name)}</h2><p class="muted">${selected.obfuscated ? 'Obfuscated build · edits auto re-obfuscate on save' : 'Plain build'} · ${escapeHtml(selected.created_at)}</p></div></div><h3>Loadstring</h3><code class="block">${makeLoaderSnippet(selected.id)}</code>${canEditSelected ? `<h3>Edit Script</h3><form method="post" action="/dashboard/scripts/${selected.id}/update"><label>Script name</label><input name="name" maxlength="80" value="${escapeHtml(selected.name)}" required><label>Actual Source</label><textarea name="code" maxlength="4000" required>${escapeHtml(selected.source_code || selected.code)}</textarea><label class="check"><input type="checkbox" name="obfuscate" value="true" ${selected.obfuscated ? 'checked' : ''}> Obfuscate on save</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><div class="buttonRow"><button type="submit">Save Permanently</button><button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate</button></div></form>` : `<p class="muted">This script is available as a loadstring. Source editing is limited to the owner/creator.</p>`}</div>` + `<div class="card"><p class="eyebrow">Add Script</p><h2>Permanent script upload</h2><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><button>Save Script</button></form></div>` : `<div class="card"><h2>Scripts</h2><p class="muted">Add your first script below. Scripts are saved permanently unless the owner removes them from the database.</p></div><div class="card"><p class="eyebrow">Add Script</p><h2>Permanent script upload</h2><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><button>Save Script</button></form></div>`;
+    content = selected ? `<div class="card"><div class="cardHead"><div><p class="eyebrow">Selected Script</p><h2>${escapeHtml(selected.name)}</h2><p class="muted">${selected.obfuscated ? 'Obfuscated build · edits auto re-obfuscate on save' : 'Plain build'} · ${escapeHtml(selected.created_at)}</p></div></div><h3>Loadstring</h3><code class="block">${makeLoaderSnippet(selected.id)}</code>${canEditSelected ? `<h3>Edit Script</h3><form method="post" action="/dashboard/scripts/${selected.id}/update"><label>Script name</label><input name="name" maxlength="80" value="${escapeHtml(selected.name)}" required><label>Actual Source</label><textarea name="code" maxlength="4000" required>${escapeHtml(selected.source_code || selected.code)}</textarea><label class="check"><input type="checkbox" name="obfuscate" value="true" ${selected.obfuscated ? 'checked' : ''}> Obfuscate on save</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><label>Key System ID</label><input name="key_system_id" placeholder="Optional key system ID" value="${escapeHtml(selected.key_system_id || '')}"><div class="buttonRow"><button type="submit">Save Permanently</button><button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate</button></div></form>` : `<p class="muted">This script is available as a loadstring. Source editing is limited to the owner/creator.</p>`}</div>` + `<div class="card"><p class="eyebrow">Add Script</p><h2>Permanent script upload</h2><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><label>Key System ID</label><input name="key_system_id" placeholder="Optional key system ID"><button>Save Script</button></form></div>` : `<div class="card"><h2>Scripts</h2><p class="muted">Add your first script below. Scripts are saved permanently unless the owner removes them from the database.</p></div><div class="card"><p class="eyebrow">Add Script</p><h2>Permanent script upload</h2><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><label>Key System ID</label><input name="key_system_id" placeholder="Optional key system ID"><button>Save Script</button></form></div>`;
   } else if (tab === 'sources') {
     content = `<div class="card"><p class="eyebrow">Sources</p><h2>Create a hosted script</h2><p class="muted">Upload a Lua or text file, or paste source manually. Obfuscation can run before hosting.</p><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><p class="hint">File contents will be placed into the source box below.</p><label>Source code</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("Karma Protection")' required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before hosting</label><label>Obfuscation level</label><select name="level"><option value="light">Light</option><option value="standard" selected>Standard</option><option value="max">Maximum</option></select><div class="buttonRow"><button type="submit">Host Script</button><button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate Only</button></div></form></div>`;
   } else if (tab === 'keys') {
@@ -1558,6 +1574,12 @@ function startApiServer() {
 
   app.get('/', (req, res) => res.type('html').send(kolsecHomePage()));
   app.get('/health', (req, res) => res.json({ ok: true, name: 'Karma Protection' }));
+
+  app.get('/api', (req, res) => {
+    const user = getSessionUser(req);
+    const apiKey = user ? makeUserApiKey(user.id) : null;
+    return res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma API</title><style>body{margin:0;background:#0a0a0a;color:#f0f0f0;font-family:system-ui,sans-serif}.wrap{max-width:1000px;margin:0 auto;padding:32px}.card{background:#111;border:1px solid #333;border-radius:16px;padding:22px;margin:18px 0}code,pre{background:#050505;border:1px solid #262626;border-radius:8px;padding:10px;display:block;overflow:auto}.gold{color:#d4af37}a{color:#d4af37}</style></head><body><div class="wrap"><h1 class="gold">Karma API</h1><p>Obfuscator and licensing API.</p>${apiKey ? `<div class="card"><b>Your API Key</b><code>${apiKey}</code></div>` : `<p><a href="/login">Login to get your API key</a></p>`}<div class="card"><h2>POST /api/obfuscate</h2><pre>{"code":"print('hi')","level":"standard"}</pre></div><div class="card"><h2>POST /api/verify</h2><pre>{"script_id":"script_x","key":"PS-...","hwid":"device","timestamp":${Date.now()}}</pre><p>Header: <code>X-API-Secret: your_script_secret</code></p></div><div class="card"><h2>GET /api/stats</h2><pre>{"scripts":0,"keys":0}</pre></div><p><a href="/">Back home</a></p></div></body></html>`);
+  });
 
   app.get('/api/stats', (req, res) => {
     const scriptCount = db.prepare('SELECT COUNT(*) AS count FROM hosted_scripts').get().count;
@@ -1682,6 +1704,7 @@ function startApiServer() {
     const code = String(req.body.code || '').slice(0, 4000);
     const shouldObfuscate = req.body.obfuscate === 'true' || req.body.obfuscate === 'on';
     const level = String(req.body.level || 'standard');
+    const keySystemId = String(req.body.key_system_id || '').trim() || null;
     if (!name || !code) return res.status(400).type('html').send('<h1>Missing name or code</h1><a href="/dashboard">Back</a>');
 
     let finalCode = code;
@@ -1692,6 +1715,7 @@ function startApiServer() {
       name,
       code: String(finalCode),
       sourceCode: code,
+      keySystemId,
       obfuscated: shouldObfuscate,
       createdBy: user.id
     });
@@ -1725,11 +1749,12 @@ function startApiServer() {
     const source = String(req.body.code || '').slice(0, 4000);
     const level = String(req.body.level || 'standard');
     const shouldObfuscate = req.body.obfuscate === 'true' || req.body.obfuscate === 'on';
+    const keySystemId = String(req.body.key_system_id || '').trim() || null;
     if (!name || !source) return res.status(400).type('html').send('<h1>Missing name or code</h1><a href="/dashboard?tab=scripts">Back</a>');
 
     const finalCode = shouldObfuscate ? await callObfuscator(source, level) : source;
-    db.prepare('UPDATE hosted_scripts SET name = ?, code = ?, source_code = ?, obfuscated = ? WHERE id = ?')
-      .run(name, finalCode, source, shouldObfuscate ? 1 : 0, req.params.id);
+    db.prepare('UPDATE hosted_scripts SET name = ?, code = ?, source_code = ?, key_system_id = ?, obfuscated = ? WHERE id = ?')
+      .run(name, finalCode, source, keySystemId, shouldObfuscate ? 1 : 0, req.params.id);
     return res.redirect(`/dashboard?tab=scripts&script=${encodeURIComponent(req.params.id)}`);
   });
 
@@ -1852,14 +1877,30 @@ function startApiServer() {
   app.get('/loadstring/:id', (req, res) => {
     const script = db.prepare('SELECT * FROM hosted_scripts WHERE id = ?').get(req.params.id);
     if (!script) return res.status(404).type('text/plain').send('-- Karma Protection: script not found');
-    const rawUrl = `${publicBaseUrl()}/script/${script.id}.lua`;
     res.setHeader('Cache-Control', 'no-store');
-    return res.type('text/plain').send(makeProtectedLoader(rawUrl));
+    return res.type('text/plain').send(makeLoaderSnippet(script.id));
+  });
+
+  app.get('/api/v1/luascripts/public/:id/download', (req, res) => {
+    const script = db.prepare('SELECT * FROM hosted_scripts WHERE id = ?').get(req.params.id);
+    if (!script) return res.status(404).type('text/plain').send('-- Karma Protection: script not found');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.type('text/plain').send(script.code);
   });
 
   app.get('/hosted', (req, res) => {
     const rows = db.prepare('SELECT id, name, obfuscated, created_at FROM hosted_scripts ORDER BY created_at DESC LIMIT 50').all();
     res.json({ ok: true, scripts: rows.map(r => ({ ...r, script_url: `${publicBaseUrl()}/script/${r.id}.lua`, loadstring_url: `${publicBaseUrl()}/loadstring/${r.id}` })) });
+  });
+
+  app.post('/api/log-execution', (req, res) => {
+    const { script_id, key, hwid, executor } = req.body || {};
+    const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || null;
+    if (script_id) {
+      db.prepare('INSERT INTO execution_logs (script_id, license_key, hwid, ip, executor) VALUES (?, ?, ?, ?, ?)')
+        .run(String(script_id), key || null, hwid || null, ip, executor || null);
+    }
+    return res.json({ ok: true });
   });
 
   app.post('/api/verify', (req, res) => {
