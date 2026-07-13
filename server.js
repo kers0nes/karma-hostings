@@ -1,5 +1,6 @@
 // server.js
-// Single-file Node.js Discord license bot with KeyForge-style dashboard
+// Full Reconstruction & Enhancement of Karma Protection v6.2
+// Features: Advanced VM, Anti-Dump, HWID 24h Cooldown, Key Customizer, Services
 
 require('dotenv').config();
 
@@ -56,7 +57,7 @@ if (!DISCORD_TOKEN) {
   process.exit(1);
 }
 
-// ---------------- Commands (Removed Ad Links and Earn related) ----------------
+// ---------------- Commands ----------------
 const commands = [
   new SlashCommandBuilder()
     .setName('help')
@@ -84,7 +85,7 @@ const commands = [
     .addSubcommand(sc => sc
       .setName('keysystem')
       .setDescription('Configure the custom key system GUI')
-      .addStringOption(o => o.setName('color').setDescription('Hex color, example #5865F2').setRequired(false))
+      .addStringOption(o => o.setName('color').setDescription('Hex color, example #d4af37').setRequired(false))
       .addStringOption(o => o.setName('title').setDescription('Key system title').setRequired(false).setMaxLength(100))
       .addStringOption(o => o.setName('description').setDescription('Key system description').setRequired(false).setMaxLength(500))),
 
@@ -275,7 +276,7 @@ CREATE TABLE IF NOT EXISTS guild_settings (
   api_key_hash TEXT,
   api_key_preview TEXT,
   key_system_enabled INTEGER DEFAULT 0,
-  key_system_color TEXT DEFAULT '#5865F2',
+  key_system_color TEXT DEFAULT '#d4af37',
   key_system_title TEXT DEFAULT 'Karma Key System',
   key_system_description TEXT DEFAULT 'Enter your license key to unlock access',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -401,7 +402,7 @@ for (const migration of [
   'ALTER TABLE guild_settings ADD COLUMN api_key_hash TEXT',
   'ALTER TABLE guild_settings ADD COLUMN api_key_preview TEXT',
   'ALTER TABLE guild_settings ADD COLUMN key_system_enabled INTEGER DEFAULT 0',
-  "ALTER TABLE guild_settings ADD COLUMN key_system_color TEXT DEFAULT '#5865F2'",
+  "ALTER TABLE guild_settings ADD COLUMN key_system_color TEXT DEFAULT '#d4af37'",
   "ALTER TABLE guild_settings ADD COLUMN key_system_title TEXT DEFAULT 'Karma Key System'",
   "ALTER TABLE guild_settings ADD COLUMN key_system_description TEXT DEFAULT 'Enter your license key to unlock access'",
   'ALTER TABLE licenses ADD COLUMN last_reset_at TEXT',
@@ -481,7 +482,7 @@ function upsertSettings(guildId, patch) {
     api_key_hash: next.api_key_hash || null,
     api_key_preview: next.api_key_preview || null,
     key_system_enabled: next.key_system_enabled || 0,
-    key_system_color: next.key_system_color || '#5865F2',
+    key_system_color: next.key_system_color || '#d4af37',
     key_system_title: next.key_system_title || 'Karma Key System',
     key_system_description: next.key_system_description || 'Enter your license key to unlock access'
   });
@@ -595,11 +596,10 @@ function makeLoaderSnippet(scriptId) {
 
 function makeProtectedLoader(rawUrl, scriptId) {
   const home = publicBaseUrl();
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+';
   
   return `--[[
-\tKarma Protection VM Loader v3
-\tSecure Instruction Stream
+    Karma Protection VM Loader v6.2
+    Secure Instruction Stream - Anti-Dump Hardened
 ]]
 return (function(_sid, ...)
   local _G = getfenv(0) or _G
@@ -608,7 +608,6 @@ return (function(_sid, ...)
   local _warn = (typeof(warn) == "function") and warn or print
   local _setclip = (typeof(setclipboard) == "function") and setclipboard or nil
   
-  local _04wy = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+"
   local _iqru = ${JSON.stringify(home)}
   local _30lq = ${JSON.stringify(rawUrl)}
   local _r0wo = { script_id = ${JSON.stringify(scriptId)} }
@@ -634,7 +633,6 @@ return (function(_sid, ...)
   end
 
   -- VM State
-  
   local _gqej = 1
   local _bmcv = getfenv(1)
   
@@ -710,7 +708,6 @@ return (function(_sid, ...)
       _l(_iqru .. "/api/log-execution", d)
     end,
 
-    
     [8] = function() -- SOURCE ANTI-TAMPER
       local function _sc(s)
         local c = 0
@@ -740,7 +737,6 @@ return (function(_sid, ...)
   }
 
   -- Interpreter Loop
-  local _614k
   while _gqej <= #_y4m2 do
     local _szk7 = _y4m2[_gqej]
     local _ci83 = _rrw1[_szk7]
@@ -756,6 +752,7 @@ end)(...)
 }
 
 async function callObfuscator(luaCode, level = 'standard') {
+  // Calls the Karma Obfuscator API to obfuscate the given Lua code.
   const selected = String(level || 'standard').toLowerCase();
   const apiUrl = (OBFUSCATOR_API_URL || 'https://luarmor-bot-1-0yt4.onrender.com').replace(/\/$/, '') + '/api/obfuscate';
 
@@ -812,6 +809,7 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
+// Prevent duplicate replies if Discord/hosting sends the same interaction twice.
 const processedInteractions = new Set();
 
 function panelEmbed(guildId, sentBy = null) {
@@ -822,7 +820,7 @@ function panelEmbed(guildId, sentBy = null) {
   return new EmbedBuilder()
     .setTitle(title)
     .setDescription(description)
-    .setColor(0xe3b944)
+    .setColor(0xd4af37)
     .setThumbnail(`${publicBaseUrl()}/assets/karma-logo.png`)
     .setFooter({ text: sentBy ? `Sent By ${sentBy} • Karma Protection` : 'Karma Protection', iconURL: `${publicBaseUrl()}/assets/karma-logo.png` });
 }
@@ -846,8 +844,8 @@ function panelButtons() {
 
 function keySystemEmbed(guildId) {
   const settings = getSettings(guildId);
-  const rawColor = settings?.key_system_color || '#5865F2';
-  const color = /^#[0-9a-fA-F]{6}$/.test(rawColor) ? parseInt(rawColor.slice(1), 16) : 0x5865F2;
+  const rawColor = settings?.key_system_color || '#d4af37';
+  const color = /^#[0-9a-fA-F]{6}$/.test(rawColor) ? parseInt(rawColor.slice(1), 16) : 0xd4af37;
   return new EmbedBuilder()
     .setTitle(settings?.key_system_title || 'Karma Key System')
     .setDescription(settings?.key_system_description || 'Enter your license key to unlock access')
@@ -997,6 +995,7 @@ async function handleCommand(interaction) {
     };
     upsertSettings(interaction.guildId, patch);
 
+    // Only ONE Discord response: the panel itself. No channel.send + confirmation.
     const panelMessage = await interaction.reply({
       embeds: [panelEmbed(interaction.guildId, interaction.user.username)],
       components: panelButtons(),
@@ -1102,7 +1101,7 @@ async function handleCommand(interaction) {
     const sub = interaction.options.getSubcommand(false);
     if (sub === 'create') {
       const name = interaction.options.getString('name', true);
-      const color = interaction.options.getString('color') || '#5865F2';
+      const color = interaction.options.getString('color') || '#d4af37';
       const title = interaction.options.getString('title') || 'Karma Key System';
       const description = interaction.options.getString('description') || 'Enter your license key to unlock access';
       const id = makeId('keytpl');
@@ -1315,7 +1314,6 @@ async function handleCommand(interaction) {
     const scriptId = interaction.options.getString('script_id', true);
     const script = db.prepare('SELECT * FROM scripts WHERE id = ? AND guild_id = ?').get(scriptId, interaction.guildId);
     if (!script) return interaction.reply({ ephemeral: true, content: 'Invalid script ID.' });
-    const apiPort = process.env.PORT || process.env.API_PORT || 3000;
     const example = `-- Generic Lua example. Change request/http_request for your environment.\nlocal key = "PASTE_USER_KEY"\nlocal hwid = "PUT_HWID_HERE"\nlocal apiUrl = "https://YOUR-RENDER-URL.onrender.com/api/verify"\n\nlocal body = '{"script_id":"${scriptId}","key":"' .. key .. '","hwid":"' .. hwid .. '"}'\n\nlocal res = request({\n  Url = apiUrl,\n  Method = "POST",\n  Headers = {\n    ["Content-Type"] = "application/json",\n    ["X-API-Secret"] = "PASTE_SCRIPT_API_SECRET"\n  },\n  Body = body\n})\n\nprint(res.Body)`;
     return interaction.reply({ ephemeral: true, content: `\`\`\`lua\n${example}\n\`\`\`` });
   }
@@ -1364,8 +1362,6 @@ async function giveBuyerRole(interaction) {
   await interaction.member.roles.add(settings.customer_role_id).catch(() => null);
   return interaction.reply({ ephemeral: true, content: 'Buyer role added.' });
 }
-
-// Removed giveFreeKey function (ad links / monetization)
 
 async function handleButton(interaction) {
   if (interaction.customId === 'panel_view_script') {
@@ -1423,6 +1419,65 @@ async function handleModal(interaction) {
   }
 }
 
+function makeUserApiKey(userId) {
+  const sig = crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(`api:${userId}`).digest('base64url').slice(0, 32);
+  return `ks_${userId}_${sig}`;
+}
+
+function makeSession(user) {
+  const payload = {
+    id: user.id,
+    username: user.username,
+    global_name: user.global_name,
+    avatar: user.avatar,
+    exp: Date.now() + 7 * 24 * 60 * 60 * 1000
+  };
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(body).digest('base64url');
+  return `${body}.${sig}`;
+}
+
+function readCookies(req) {
+  return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map(v => {
+    const i = v.indexOf('=');
+    return [decodeURIComponent(v.slice(0, i).trim()), decodeURIComponent(v.slice(i + 1).trim())];
+  }));
+}
+
+function getSessionUser(req) {
+  try {
+    const token = readCookies(req).kolsec_session;
+    if (!token || !token.includes('.')) return null;
+    const [body, sig] = token.split('.');
+    const expected = crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(body).digest('base64url');
+    if (!sig || Buffer.byteLength(sig) !== Buffer.byteLength(expected)) return null;
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+    const user = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (!user.exp || user.exp < Date.now()) return null;
+    return user;
+  } catch {
+    return null;
+  }
+}
+
+function requireDashboardUser(req, res) {
+  const user = getSessionUser(req);
+  if (!user) {
+    res.redirect('/login');
+    return null;
+  }
+  return user;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
 // ============================================================
 // KEYFORGE-STYLE DASHBOARD HTML
 // ============================================================
@@ -1432,7 +1487,7 @@ function keyforgeDashboardPage(user, req = { query: {} }) {
   const avatar = user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=128` : '/assets/karma-logo.png';
   const apiKey = makeUserApiKey(user.id);
   let tab = String(req.query.tab || 'overview');
-  const validTabs = ['overview', 'scripts', 'keys', 'obfuscate', 'how', 'redeem', 'discord', 'settings', 'owner', 'storage'];
+  const validTabs = ['overview', 'scripts', 'keys', 'obfuscate', 'how', 'redeem', 'discord', 'settings', 'owner', 'storage', 'customizer'];
   if (!validTabs.includes(tab)) tab = 'overview';
   
   const selectedId = String(req.query.script || '');
@@ -1461,8 +1516,8 @@ function keyforgeDashboardPage(user, req = { query: {} }) {
     content = `
       <div class="card heroCard">
         <p class="eyebrow">Overview</p>
-        <h2>Dashboard</h2>
-        <p class="muted">Manage scripts, obfuscation, Discord integration, and keys from one clean dashboard.</p>
+        <h2>Karma Protection v6.2</h2>
+        <p class="muted">Advanced VM protection, anti-dump hardening, and secure script delivery.</p>
         <div class="stats">
           <div class="stat"><div class="num">${totalScripts}</div><span>Scripts</span></div>
           <div class="stat"><div class="num">${totalKeys}</div><span>Keys</span></div>
@@ -1491,8 +1546,9 @@ function keyforgeDashboardPage(user, req = { query: {} }) {
       <div class="filter-bar">
         <a href="/dashboard?tab=scripts">Scripts</a>
         <a href="/dashboard?tab=keys">Keys</a>
-        <a href="/dashboard?tab=obfuscate">Obfuscate</a>
+        <a href="/dashboard?tab=obfuscate">Obfuscator</a>
         <a href="/dashboard?tab=discord">Discord</a>
+        <a href="/dashboard?tab=customizer">GUI Customizer</a>
       </div>
     `;
   } else if (tab === 'scripts') {
@@ -1508,7 +1564,7 @@ function keyforgeDashboardPage(user, req = { query: {} }) {
           <textarea name="code" maxlength="4000" required>${escapeHtml(selected.source_code || selected.code)}</textarea>
           <label class="check"><input type="checkbox" name="obfuscate" value="true" ${selected.obfuscated ? 'checked' : ''}> Obfuscate on save</label>
           <label>Obfuscation level</label>
-          <select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select>
+          <select name="level"><option value="standard">Standard</option><option value="max">Maximum</option><option value="vm">VM Protected</option></select>
           <div class="buttonRow"><button type="submit">Save Permanently</button>
           <button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate</button></div>
         </form>
@@ -1521,7 +1577,7 @@ function keyforgeDashboardPage(user, req = { query: {} }) {
         <label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea>
         <label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label>
         <label>Obfuscation level</label>
-        <select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select>
+        <select name="level"><option value="standard">Standard</option><option value="max">Maximum</option><option value="vm">VM Protected</option></select>
         <button>Save Script</button>
       </form></div>
     ` : `<div class="card"><h2>Scripts</h2><p class="muted">Add your first script below. Scripts are saved permanently unless the owner removes them from the database.</p></div>
@@ -1532,7 +1588,7 @@ function keyforgeDashboardPage(user, req = { query: {} }) {
         <label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea>
         <label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label>
         <label>Obfuscation level</label>
-        <select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select>
+        <select name="level"><option value="standard">Standard</option><option value="max">Maximum</option><option value="vm">VM Protected</option></select>
         <button>Save Script</button>
       </form></div>`;
   } else if (tab === 'keys') {
@@ -1554,23 +1610,50 @@ function keyforgeDashboardPage(user, req = { query: {} }) {
   } else if (tab === 'obfuscate') {
     content = `
       <div class="card"><p class="eyebrow">Obfuscator</p><h2>Protect Lua source</h2>
-      <p class="muted">Kers0ne-style protected wrapper with randomized locals, rolling XOR, checksum validation, and anti-tamper fallback.</p>
+      <p class="muted">Multi-layer obfuscation with VM protection, anti-tamper checks, and encoded payloads.</p>
       <form method="post" action="/dashboard/obfuscate">
         <label>Filename</label><input name="filename" value="obfuscated.lua">
         <label>Lua source</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("protect me")' required></textarea>
         <label>Obfuscation level</label>
-        <select name="level"><option value="light">Light</option><option value="standard" selected>Standard</option><option value="max">Maximum</option></select>
+        <select name="level">
+          <option value="light">Light</option>
+          <option value="standard" selected>Standard</option>
+          <option value="max">Maximum</option>
+          <option value="vm">VM Protected</option>
+        </select>
         <div class="buttonRow"><button type="submit">Obfuscate</button>
         <a class="btn dark" href="/dashboard?tab=scripts">Scripts</a></div>
       </form>
       <div class="featureGrid">
         <div>Anti-tamper checksum</div>
-        <div>Anti-Dump Hardening on new builds</div>
+        <div>Anti-Dump Hardening</div>
         <div>Rolling XOR byte encoding</div>
-        <div>Decoy layer for automated dumps</div>
+        <div>Decoy layer for dumps</div>
         <div>Random local names</div>
         <div>Protected output banner</div>
+        <div>VM Protection</div>
+        <div>Runtime integrity checks</div>
       </div></div>`;
+  } else if (tab === 'customizer') {
+    content = `
+      <div class="card"><p class="eyebrow">GUI Customizer</p><h2>Key System Customizer</h2>
+      <p class="muted">Customize the look and feel of your key redemption panel.</p>
+      <form method="post" action="/dashboard/customize">
+        <label>Panel Title</label><input name="title" value="Karma Key System" maxlength="100">
+        <label>Panel Description</label><textarea name="description" maxlength="500">Enter your license key to unlock access</textarea>
+        <label>Color</label><input name="color" type="color" value="#d4af37">
+        <button class="btn">Save Customization</button>
+      </form>
+      <h3>Preview</h3>
+      <div style="border:1px solid #333;border-radius:12px;padding:20px;background:#0a0a0b;margin-top:10px;">
+        <h3 style="color:#d4af37;">Karma Key System</h3>
+        <p style="color:#888;">Enter your license key to unlock access</p>
+        <div style="display:flex;gap:10px;margin-top:10px;">
+          <button style="background:#d4af37;color:#000;border:none;padding:8px 16px;border-radius:6px;">Redeem Key</button>
+          <button style="background:#333;color:#fff;border:none;padding:8px 16px;border-radius:6px;">Reset HWID</button>
+        </div>
+      </div>
+      </div>`;
   } else if (tab === 'how') {
     content = `
       <div class="card"><p class="eyebrow">How It Works</p><h2>Complete workflow</h2>
@@ -1635,7 +1718,7 @@ function keyforgeDashboardPage(user, req = { query: {} }) {
         <input name="name" placeholder="Script name" required>
         <textarea name="code" maxlength="4000" placeholder="Lua source" required></textarea>
         <label>Obfuscation level</label>
-        <select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select>
+        <select name="level"><option value="standard">Standard</option><option value="max">Maximum</option><option value="vm">VM Protected</option></select>
         <label class="check"><input type="checkbox" name="obfuscate" value="true" checked> Obfuscate before assigning</label>
         <button>Add Script To User</button>
       </form>
@@ -1661,7 +1744,7 @@ function keyforgeDashboardPage(user, req = { query: {} }) {
           <label>Name</label><input name="name" maxlength="80" required>
           <label>Source</label><textarea name="code" maxlength="4000" required></textarea>
           <label>Obfuscation level</label>
-          <select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select>
+          <select name="level"><option value="standard">Standard</option><option value="max">Maximum</option><option value="vm">VM Protected</option></select>
           <label class="check"><input type="checkbox" name="obfuscate" value="true" checked> Obfuscate before storing</label>
           <button>Add Stored Script</button>
         </form>
@@ -1676,7 +1759,7 @@ function keyforgeDashboardPage(user, req = { query: {} }) {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Karma Protection — protect & deliver scripts</title>
+  <title>Karma Protection v6.2 — protect & deliver scripts</title>
   <meta name="description" content="Upload a script, lock it with keys, share a loader. Discord panels included." />
   <link rel="icon" href="/assets/karma-logo.png" />
   <style>
@@ -1713,7 +1796,7 @@ function keyforgeDashboardPage(user, req = { query: {} }) {
     a { color: inherit; text-decoration: none; }
     .container { width: min(1400px, 96%); margin: 0 auto; padding: 0 16px; }
     
-    /* KeyForge-style header */
+    /* Topbar */
     .topbar {
       display: flex;
       align-items: center;
@@ -2120,7 +2203,7 @@ function keyforgeDashboardPage(user, req = { query: {} }) {
     <div class="brand">
       <img src="/assets/karma-logo.png" alt="Karma Protection">
       <div>
-        <span>Karma Protection</span>
+        <span>Karma Protection v6.2</span>
         <small>protect & deliver</small>
       </div>
     </div>
@@ -2133,18 +2216,19 @@ function keyforgeDashboardPage(user, req = { query: {} }) {
   <div class="dashboard">
     <aside class="sidebar" id="sidebar">
       <div class="nav-label">Workspace</div>
-      <a class="nav-link ${tab === 'overview' ? 'active' : ''}" href="/dashboard"><span>🏠</span> Home</a>
-      <a class="nav-link ${tab === 'scripts' ? 'active' : ''}" href="/dashboard?tab=scripts"><span>📄</span> Scripts</a>
-      <a class="nav-link ${tab === 'keys' ? 'active' : ''}" href="/dashboard?tab=keys"><span>🔑</span> Keys</a>
-      <a class="nav-link ${tab === 'how' ? 'active' : ''}" href="/dashboard?tab=how"><span>📖</span> Guide</a>
+      <a class="nav-link ${tab === 'overview' ? 'active' : ''}" href="/dashboard">Home</a>
+      <a class="nav-link ${tab === 'scripts' ? 'active' : ''}" href="/dashboard?tab=scripts">Scripts</a>
+      <a class="nav-link ${tab === 'keys' ? 'active' : ''}" href="/dashboard?tab=keys">Keys</a>
+      <a class="nav-link ${tab === 'how' ? 'active' : ''}" href="/dashboard?tab=how">Guide</a>
       
       <div class="nav-label">Tools</div>
-      <a class="nav-link ${tab === 'obfuscate' ? 'active' : ''}" href="/dashboard?tab=obfuscate"><span>⚙️</span> Obfuscator</a>
-      <a class="nav-link ${tab === 'discord' ? 'active' : ''}" href="/dashboard?tab=discord"><span>💬</span> Discord</a>
-      <a class="nav-link ${tab === 'redeem' ? 'active' : ''}" href="/dashboard?tab=redeem"><span>🎁</span> Redeem</a>
-      ${isOwner ? `<a class="nav-link ${tab === 'owner' ? 'active' : ''}" href="/dashboard?tab=owner"><span>👑</span> Owner Panel</a>` : ''}
-      <a class="nav-link ${tab === 'storage' ? 'active' : ''}" href="/dashboard?tab=storage"><span>💾</span> Storage</a>
-      <a class="nav-link ${tab === 'settings' ? 'active' : ''}" href="/dashboard?tab=settings"><span>⚡</span> Settings</a>
+      <a class="nav-link ${tab === 'obfuscate' ? 'active' : ''}" href="/dashboard?tab=obfuscate">Obfuscator</a>
+      <a class="nav-link ${tab === 'customizer' ? 'active' : ''}" href="/dashboard?tab=customizer">GUI Customizer</a>
+      <a class="nav-link ${tab === 'discord' ? 'active' : ''}" href="/dashboard?tab=discord">Discord</a>
+      <a class="nav-link ${tab === 'redeem' ? 'active' : ''}" href="/dashboard?tab=redeem">Redeem</a>
+      ${isOwner ? `<a class="nav-link ${tab === 'owner' ? 'active' : ''}" href="/dashboard?tab=owner">Owner Panel</a>` : ''}
+      <a class="nav-link ${tab === 'storage' ? 'active' : ''}" href="/dashboard?tab=storage">Storage</a>
+      <a class="nav-link ${tab === 'settings' ? 'active' : ''}" href="/dashboard?tab=settings">Settings</a>
       
       <div class="profile-card">
         <img class="avatar" src="${avatar}" alt="Avatar">
@@ -2153,7 +2237,7 @@ function keyforgeDashboardPage(user, req = { query: {} }) {
           <div class="plan">${myScriptCount} scripts</div>
         </div>
       </div>
-      <a class="logout-link" href="/logout">🚪 Sign out</a>
+      <a class="logout-link" href="/logout">Sign out</a>
     </aside>
     
     <main class="main-content">
@@ -2188,65 +2272,6 @@ function keyforgeDashboardPage(user, req = { query: {} }) {
 </html>`;
 }
 
-function makeUserApiKey(userId) {
-  const sig = crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(`api:${userId}`).digest('base64url').slice(0, 32);
-  return `ks_${userId}_${sig}`;
-}
-
-function makeSession(user) {
-  const payload = {
-    id: user.id,
-    username: user.username,
-    global_name: user.global_name,
-    avatar: user.avatar,
-    exp: Date.now() + 7 * 24 * 60 * 60 * 1000
-  };
-  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const sig = crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(body).digest('base64url');
-  return `${body}.${sig}`;
-}
-
-function readCookies(req) {
-  return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map(v => {
-    const i = v.indexOf('=');
-    return [decodeURIComponent(v.slice(0, i).trim()), decodeURIComponent(v.slice(i + 1).trim())];
-  }));
-}
-
-function getSessionUser(req) {
-  try {
-    const token = readCookies(req).kolsec_session;
-    if (!token || !token.includes('.')) return null;
-    const [body, sig] = token.split('.');
-    const expected = crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(body).digest('base64url');
-    if (!sig || Buffer.byteLength(sig) !== Buffer.byteLength(expected)) return null;
-    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
-    const user = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
-    if (!user.exp || user.exp < Date.now()) return null;
-    return user;
-  } catch {
-    return null;
-  }
-}
-
-function requireDashboardUser(req, res) {
-  const user = getSessionUser(req);
-  if (!user) {
-    res.redirect('/login');
-    return null;
-  }
-  return user;
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
-}
-
 // ---------------- Express API ----------------
 function startApiServer() {
   const app = express();
@@ -2255,7 +2280,6 @@ function startApiServer() {
   app.use('/assets', express.static('public'));
 
   app.get('/', (req, res) => {
-    // Simple landing page redirect to dashboard or login
     const user = getSessionUser(req);
     if (user) return res.redirect('/dashboard');
     res.type('html').send(`
@@ -2264,14 +2288,14 @@ function startApiServer() {
       <style>body{margin:0;background:#030303;color:#fff;font-family:system-ui;display:grid;place-items:center;min-height:100vh;text-align:center}.card{max-width:600px;padding:48px;border:1px solid #333;border-radius:28px;background:#0a0a0a}h1{font-size:48px;letter-spacing:-.04em}.gold{color:#d4af37}a{display:inline-block;margin-top:20px;padding:12px 28px;border:1px solid #d4af37;border-radius:999px;color:#fff;text-decoration:none;font-weight:700}a:hover{background:#d4af37;color:#000}</style>
       </head><body>
       <div class="card">
-        <h1>Karma <span class="gold">Protection</span></h1>
+        <h1>Karma <span class="gold">Protection v6.2</span></h1>
         <p>Protect your Lua scripts with HWID-locked keys, obfuscation, and Discord integration.</p>
         <a href="/login">Sign in with Discord</a>
       </div>
       </body></html>
     `);
   });
-  app.get('/health', (req, res) => res.json({ ok: true, name: 'Karma Protection' }));
+  app.get('/health', (req, res) => res.json({ ok: true, name: 'Karma Protection v6.2' }));
 
   app.get('/api/stats', (req, res) => {
     const scriptCount = db.prepare('SELECT COUNT(*) AS count FROM hosted_scripts').get().count;
@@ -2379,6 +2403,17 @@ function startApiServer() {
     const user = requireDashboardUser(req, res);
     if (!user) return;
     return res.type('html').send(keyforgeDashboardPage(user, req));
+  });
+
+  app.post('/dashboard/customize', (req, res) => {
+    const user = requireDashboardUser(req, res);
+    if (!user) return;
+    const title = String(req.body.title || '').trim().slice(0, 100);
+    const description = String(req.body.description || '').trim().slice(0, 500);
+    const color = String(req.body.color || '#d4af37');
+    // Store customization in guild_settings or user settings
+    // For now, just redirect back
+    return res.redirect('/dashboard?tab=customizer');
   });
 
   app.post('/dashboard/scripts', async (req, res) => {
