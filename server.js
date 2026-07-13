@@ -26,13 +26,13 @@ const {
 } = require('discord.js');
 
 const {
-  KARMA_DISCORD_TOKEN,
+  DISCORD_TOKEN,
   CLIENT_ID,
   GUILD_ID,
   DATABASE_PATH = './data.sqlite',
   GLOBAL_API_TOKEN,
   PUBLIC_BASE_URL,
-  OBFUSCATOR_API_URL = 'https://leakd-detector.up.railway.app',
+  OBFUSCATOR_API_URL = 'https://luarmor-bot-1-0yt4.onrender.com',
   DISCORD_OAUTH_CLIENT_ID,
   DISCORD_CLIENT_SECRET,
   SESSION_SECRET,
@@ -51,7 +51,7 @@ const MAX_WEB_SCRIPTS_PER_USER = parseInt(MAX_SCRIPTS_PER_USER, 10) || 5;
 const resetCooldowns = new Map();
 const oauthStates = new Map();
 
-if (!KARMA_DISCORD_TOKEN) {
+if (!DISCORD_TOKEN) {
   console.error('Missing DISCORD_TOKEN environment variable.');
   process.exit(1);
 }
@@ -84,9 +84,10 @@ const commands = [
     .addSubcommand(sc => sc
       .setName('keysystem')
       .setDescription('Configure the custom key system GUI')
-      .addStringOption(o => o.setName('color').setDescription('Hex color, example #d4af37').setRequired(false))
+      .addStringOption(o => o.setName('color').setDescription('Hex color, example #5865F2').setRequired(false))
       .addStringOption(o => o.setName('title').setDescription('Key system title').setRequired(false).setMaxLength(100))
       .addStringOption(o => o.setName('description').setDescription('Key system description').setRequired(false).setMaxLength(500))),
+
 
   new SlashCommandBuilder()
     .setName('apply')
@@ -98,7 +99,8 @@ const commands = [
     .addStringOption(o => o.setName('level').setDescription('Obfuscation level').setRequired(false).addChoices(
       { name: 'Light', value: 'light' },
       { name: 'Standard', value: 'standard' },
-      { name: 'Maximum', value: 'max' }
+      { name: 'Maximum', value: 'max' },
+      { name: 'VM Protected', value: 'vm' }
     )),
 
   new SlashCommandBuilder()
@@ -173,7 +175,8 @@ const commands = [
     .addStringOption(o => o.setName('level').setDescription('Obfuscation level').setRequired(false).addChoices(
       { name: 'Light', value: 'light' },
       { name: 'Standard', value: 'standard' },
-      { name: 'Maximum', value: 'max' }
+      { name: 'Maximum', value: 'max' },
+      { name: 'VM Protected', value: 'vm' }
     )),
 
   new SlashCommandBuilder()
@@ -185,7 +188,8 @@ const commands = [
     .addStringOption(o => o.setName('level').setDescription('Obfuscation level').setRequired(false).addChoices(
       { name: 'Light', value: 'light' },
       { name: 'Standard', value: 'standard' },
-      { name: 'Maximum', value: 'max' }
+      { name: 'Maximum', value: 'max' },
+      { name: 'VM Protected', value: 'vm' }
     ))
     .addBooleanOption(o => o.setName('private').setDescription('Only you can see the result. Default: false/public')),
 
@@ -238,12 +242,14 @@ async function deployCommands() {
     return;
   }
 
-  const rest = new REST({ version: '10' }).setToken(KARMA_DISCORD_TOKEN);
+  const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 
   if (GUILD_ID) {
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
     console.log(`Deployed ${commands.length} commands to guild ${GUILD_ID}.`);
 
+    // Remove old global commands like /setup and /genkey so they stop showing.
+    // Set CLEAR_GLOBAL_COMMANDS=false if you intentionally use global commands.
     if (process.env.CLEAR_GLOBAL_COMMANDS !== 'false') {
       await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
       console.log('Cleared global commands.');
@@ -272,7 +278,7 @@ CREATE TABLE IF NOT EXISTS guild_settings (
   api_key_hash TEXT,
   api_key_preview TEXT,
   key_system_enabled INTEGER DEFAULT 0,
-  key_system_color TEXT DEFAULT '#d4af37',
+  key_system_color TEXT DEFAULT '#5865F2',
   key_system_title TEXT DEFAULT 'Karma Key System',
   key_system_description TEXT DEFAULT 'Enter your license key to unlock access',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -311,7 +317,6 @@ CREATE TABLE IF NOT EXISTS hosted_scripts (
   code TEXT NOT NULL,
   source_code TEXT,
   linked_script_id TEXT,
-  key_system_id TEXT,
   obfuscated INTEGER NOT NULL DEFAULT 0,
   created_by TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -339,6 +344,17 @@ CREATE TABLE IF NOT EXISTS key_system_templates (
   guild_id TEXT,
   config TEXT NOT NULL,
   created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+
+CREATE TABLE IF NOT EXISTS execution_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  script_id TEXT NOT NULL,
+  license_key TEXT,
+  hwid TEXT,
+  ip TEXT,
+  executor TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -372,16 +388,6 @@ CREATE TABLE IF NOT EXISTS banned_hwids (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS execution_logs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  script_id TEXT NOT NULL,
-  license_key TEXT,
-  hwid TEXT,
-  ip TEXT,
-  executor TEXT,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
 CREATE INDEX IF NOT EXISTS idx_scripts_guild ON scripts(guild_id);
 CREATE INDEX IF NOT EXISTS idx_licenses_script ON licenses(script_id);
 CREATE INDEX IF NOT EXISTS idx_licenses_user ON licenses(discord_user_id);
@@ -389,10 +395,9 @@ CREATE INDEX IF NOT EXISTS idx_hosted_scripts_guild ON hosted_scripts(guild_id);
 CREATE INDEX IF NOT EXISTS idx_hosted_scripts_user ON hosted_scripts(created_by);
 CREATE INDEX IF NOT EXISTS idx_hosted_scripts_linked ON hosted_scripts(linked_script_id);
 CREATE INDEX IF NOT EXISTS idx_premium_codes_redeemed_by ON premium_codes(redeemed_by);
-CREATE INDEX IF NOT EXISTS idx_execution_logs_script ON execution_logs(script_id);
 `);
 
-// Migrations
+// Migrations for older Render SQLite databases.
 for (const migration of [
   'ALTER TABLE guild_settings ADD COLUMN panel_title TEXT',
   'ALTER TABLE guild_settings ADD COLUMN panel_description TEXT',
@@ -400,7 +405,7 @@ for (const migration of [
   'ALTER TABLE guild_settings ADD COLUMN api_key_hash TEXT',
   'ALTER TABLE guild_settings ADD COLUMN api_key_preview TEXT',
   'ALTER TABLE guild_settings ADD COLUMN key_system_enabled INTEGER DEFAULT 0',
-  "ALTER TABLE guild_settings ADD COLUMN key_system_color TEXT DEFAULT '#d4af37'",
+  "ALTER TABLE guild_settings ADD COLUMN key_system_color TEXT DEFAULT '#5865F2'",
   "ALTER TABLE guild_settings ADD COLUMN key_system_title TEXT DEFAULT 'Karma Key System'",
   "ALTER TABLE guild_settings ADD COLUMN key_system_description TEXT DEFAULT 'Enter your license key to unlock access'",
   'ALTER TABLE licenses ADD COLUMN last_reset_at TEXT',
@@ -411,8 +416,7 @@ for (const migration of [
   "ALTER TABLE website_users ADD COLUMN plan TEXT NOT NULL DEFAULT 'free'",
   "ALTER TABLE website_users ADD COLUMN script_quota INTEGER NOT NULL DEFAULT 5",
   "ALTER TABLE hosted_scripts ADD COLUMN source_code TEXT",
-  "ALTER TABLE hosted_scripts ADD COLUMN linked_script_id TEXT",
-  "ALTER TABLE hosted_scripts ADD COLUMN key_system_id TEXT"
+  "ALTER TABLE hosted_scripts ADD COLUMN linked_script_id TEXT"
 ]) {
   try { db.prepare(migration).run(); } catch (_) {}
 }
@@ -481,7 +485,7 @@ function upsertSettings(guildId, patch) {
     api_key_hash: next.api_key_hash || null,
     api_key_preview: next.api_key_preview || null,
     key_system_enabled: next.key_system_enabled || 0,
-    key_system_color: next.key_system_color || '#d4af37',
+    key_system_color: next.key_system_color || '#5865F2',
     key_system_title: next.key_system_title || 'Karma Key System',
     key_system_description: next.key_system_description || 'Enter your license key to unlock access'
   });
@@ -499,7 +503,7 @@ function createScript({ guildId, name, createdBy }) {
   return { id, name, apiSecret };
 }
 
-function createHostedScript({ guildId, name, code, sourceCode, linkedScriptId, keySystemId, obfuscated, createdBy }) {
+function createHostedScript({ guildId, name, code, sourceCode, linkedScriptId, obfuscated, createdBy }) {
   let id = makeId('host');
   const existing = linkedScriptId
     ? db.prepare('SELECT * FROM hosted_scripts WHERE guild_id = ? AND linked_script_id = ?').get(guildId, linkedScriptId)
@@ -509,19 +513,19 @@ function createHostedScript({ guildId, name, code, sourceCode, linkedScriptId, k
     id = existing.id;
     db.prepare(`
       UPDATE hosted_scripts
-      SET name = ?, code = ?, source_code = ?, linked_script_id = ?, key_system_id = ?, obfuscated = ?, created_by = ?
+      SET name = ?, code = ?, source_code = ?, linked_script_id = ?, obfuscated = ?, created_by = ?
       WHERE id = ?
-    `).run(name, code, sourceCode || code, linkedScriptId || null, keySystemId || null, obfuscated ? 1 : 0, createdBy, id);
+    `).run(name, code, sourceCode || code, linkedScriptId || null, obfuscated ? 1 : 0, createdBy, id);
   } else {
     db.prepare(`
-      INSERT INTO hosted_scripts (id, guild_id, name, code, source_code, linked_script_id, key_system_id, obfuscated, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, guildId, name, code, sourceCode || code, linkedScriptId || null, keySystemId || null, obfuscated ? 1 : 0, createdBy);
+      INSERT INTO hosted_scripts (id, guild_id, name, code, source_code, linked_script_id, obfuscated, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, guildId, name, code, sourceCode || code, linkedScriptId || null, obfuscated ? 1 : 0, createdBy);
   }
 
-  const script = { id, guild_id: guildId, name, code, source_code: sourceCode || code, linked_script_id: linkedScriptId || null, key_system_id: keySystemId || null, obfuscated: Boolean(obfuscated), created_by: createdBy };
+  const script = { id, guild_id: guildId, name, code, source_code: sourceCode || code, linked_script_id: linkedScriptId || null, obfuscated: Boolean(obfuscated), created_by: createdBy };
   saveHostedScriptToSupabase(script).catch(err => console.warn('Supabase save failed:', err.message));
-  return { id, name, code, source_code: sourceCode || code, linked_script_id: linkedScriptId || null, key_system_id: keySystemId || null, obfuscated: Boolean(obfuscated) };
+  return { id, name, code, source_code: sourceCode || code, linked_script_id: linkedScriptId || null, obfuscated: Boolean(obfuscated) };
 }
 
 function supabaseConfig() {
@@ -540,7 +544,6 @@ async function saveHostedScriptToSupabase(script) {
     code: script.code,
     source_code: script.source_code || script.code,
     linked_script_id: script.linked_script_id || null,
-    key_system_id: script.key_system_id || null,
     obfuscated: script.obfuscated ? 1 : 0,
     created_by: script.created_by
   };
@@ -567,20 +570,19 @@ async function hydrateHostedScriptsFromSupabase() {
   if (!res.ok) throw new Error(await res.text());
   const rows = await res.json();
   const stmt = db.prepare(`
-    INSERT INTO hosted_scripts (id, guild_id, name, code, source_code, linked_script_id, key_system_id, obfuscated, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO hosted_scripts (id, guild_id, name, code, source_code, linked_script_id, obfuscated, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       guild_id=excluded.guild_id,
       name=excluded.name,
       code=excluded.code,
       source_code=excluded.source_code,
       linked_script_id=excluded.linked_script_id,
-      key_system_id=excluded.key_system_id,
       obfuscated=excluded.obfuscated,
       created_by=excluded.created_by
   `);
   for (const r of rows) {
-    stmt.run(r.id, r.guild_id || 'web', r.name || r.id, r.code || '', r.source_code || r.code || '', r.linked_script_id || null, r.key_system_id || null, r.obfuscated ? 1 : 0, r.created_by || 'unknown');
+    stmt.run(r.id, r.guild_id || 'web', r.name || r.id, r.code || '', r.source_code || r.code || '', r.linked_script_id || null, r.obfuscated ? 1 : 0, r.created_by || 'unknown');
   }
   console.log(`Hydrated ${rows.length} hosted scripts from Supabase.`);
 }
@@ -592,144 +594,197 @@ function publicBaseUrl() {
 }
 
 function makeLoaderSnippet(scriptId) {
-  const baseUrl = publicBaseUrl();
-  return `getgenv().SCRIPT_KEY = "KEYLESS" loadstring(game:HttpGet("${baseUrl}/api/v1/luascripts/public/${scriptId}/download"))()`;
+  return `loadstring(game:HttpGet("${publicBaseUrl()}/loadstring/${scriptId}"))("${scriptId}")`;
 }
 
-function makeProtectedLoader(rawUrl) {
+function makeProtectedLoader(rawUrl, scriptId) {
   const home = publicBaseUrl();
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+';
+  
   return `--[[
-\tKarma Protection Loader
-\tStable execution path
+\tKarma Protection VM Loader v3
+\tSecure Instruction Stream
 ]]
-return(function(...)
-  local _home=${JSON.stringify(home)}
-  local _url=${JSON.stringify(rawUrl)}
-  local function _safe(fn,...) local ok,res=pcall(fn,...) if ok then return res end return nil end
-  local function _tamper()
-    if setclipboard then _safe(setclipboard,_home) end
-    if warn then _safe(warn,"Karma loader fallback: ".._home) end
-    return nil
+return (function(_sid, ...)
+  local _G = getfenv(0) or _G
+  local _type, _pcall, _tostr, _byte, _error = type, pcall, tostring, string.byte, error
+  local _load = loadstring or load
+  local _warn = (typeof(warn) == "function") and warn or print
+  local _setclip = (typeof(setclipboard) == "function") and setclipboard or nil
+  
+  local _04wy = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+"
+  local _iqru = ${JSON.stringify(home)}
+  local _30lq = ${JSON.stringify(rawUrl)}
+  local _r0wo = { script_id = ${JSON.stringify(scriptId)} }
+  
+  local function _gat3(m)
+    if _setclip then _pcall(_setclip, _iqru) end
+    _pcall(_warn, "[Karma VM] " .. _tostr(m) .. " | " .. _iqru)
+    while true do _error(m, 0) end
   end
-  local function _get(url)
-    if game and game.HttpGet then
-      local r=_safe(function() return game:HttpGet(url) end)
-      if type(r)=="string" then return r end
-    end
-    local req = (syn and syn.request) or http_request or request
-    if type(req)=="function" then
-      local res=_safe(req,{Url=url,Method="GET"})
-      if type(res)=="table" then return res.Body or res.body end
-      if type(res)=="string" then return res end
-    end
-    return nil
+
+  local function _xm17(f, ...)
+    local ok, r = _pcall(f, ...)
+    return ok and r or nil
   end
-  if type(loadstring or load)~="function" then return _tamper() end
-  local _src=_get(_url)
-  if type(_src)~="string" or #_src<1 then return _tamper() end
-  local _ok,_fn=pcall(loadstring or load,_src,"KarmaLoaderPayload")
-  if not _ok or type(_fn)~="function" then return _tamper() end
-  return _fn(...)
-end)(...)
-`;
-}
 
-function kers0neLocalObfuscate(luaCode, opts = {}) {
-  // Karma Obfuscation - Legacy Stable
-  // Protected by Karma Obfuscation v2
-  const source = String(luaCode || '');
-  const strength = Math.max(1, Math.min(3, Number(opts.strength || 2)));
-  const key = crypto.randomBytes(1)[0] || 173;
-  const salt = crypto.randomBytes(1)[0] || 41;
-  const bytes = Buffer.from(source, 'utf8');
-  const encoded = [];
-  let prev = salt;
+  local function _r8wq(v)
+    local s, n = _tostr(v), 2166136261
+    for i = 1, #s do
+      n = bit32.bxor(n, _byte(s, i))
+      n = (n * 16777619) % 4294967296
+    end
+    return n
+  end
 
-  for (let i = 0; i < bytes.length; i++) {
-    const pos = i + 1;
-    const mask = (key + pos * 17 + (pos % 7) * 31 + prev) & 255;
-    const enc = bytes[i] ^ mask;
-    encoded.push(enc);
-    prev = (enc + key + pos) & 255;
+  -- VM State
+  
+  local _gqej = 1
+  local _bmcv = getfenv(1)
+  
+  -- Instruction Stream (Encoded)
+  -- 1: PULSE, 2: CHECK_ENV, 3: CHECK_HOOKS, 4: CHECK_GAME, 5: FETCH, 6: EXECUTE
+  local _y4m2 = {1, 2, 3, 4, 5, 7, 8, 1, 3, 6}
+  
+  local _rrw1 = {
+    [1] = function() -- PULSE / TAMPER CHECK
+      local _raw = { _K = "Karma Protection" }
+      local _sig = { _K = 2947889846 }
+      for k, v in pairs(_sig) do
+        if _r8wq(_raw[k]) ~= v then _gat3("tamper detected") end
+      end
+    end,
+    [2] = function() -- CHECK_ENV
+      if typeof(getfenv) == "function" then
+        local e = _xm17(getfenv, 1)
+        if _type(e) == "table" then
+          local s = { "hookfunction", "newcclosure", "syn", "fluxus" }
+          for _, k in ipairs(s) do
+            if e[k] ~= nil and rawget(_G, k) == nil then _gat3("env logger: " .. k) end
+          end
+        end
+      end
+    end,
+    [3] = function() -- CHECK_HOOKS
+      local c = {tostring, type, pcall, pairs, _load}
+      for _, f in ipairs(c) do
+        if typeof(f) ~= "function" then _gat3("hook detected") end
+        if typeof(islclosure) == "function" and islclosure(f) then _gat3("hooked closure") end
+      end
+    end,
+    [4] = function() -- CHECK_GAME
+      local ok, info = _pcall(function() return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId) end)
+      if ok and _type(info) == "table" and _type(info.Name) ~= "string" then _gat3("game tamper") end
+    end,
+    [5] = function() -- FETCH
+      local function _g(u)
+        if game and game.HttpGet then
+          local r = _xm17(function() return game:HttpGet(u) end)
+          if _type(r) == "string" and #r > 0 then return r end
+        end
+        local req = (typeof(syn) == "table" and syn.request) or (typeof(http_request) == "function" and http_request) or (typeof(request) == "function" and request)
+        if _type(req) == "function" then
+          local res = _xm17(req, { Url = u, Method = "GET" })
+          if _type(res) == "table" then return res.Body or res.body end
+        end
+        return nil
+      end
+      _r0wo.src = _g(_30lq)
+      if _type(_r0wo.src) ~= "string" then _gat3("fetch failed") end
+    end,
+    
+    [7] = function() -- LOGGING
+      local function _l(u, d)
+        local req = (typeof(syn) == "table" and syn.request) or (typeof(http_request) == "function" and http_request) or (typeof(request) == "function" and request)
+        if _type(req) == "function" then
+          _pcall(req, {
+            Url = u,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = game:GetService("HttpService"):JSONEncode(d)
+          })
+        end
+      end
+      local d = {
+        script_id = _r0wo.script_id or "unknown",
+        key = _G.KarmaKey or "none",
+        hwid = (typeof(gethwid) == "function" and gethwid()) or "none",
+        executor = (typeof(identifyexecutor) == "function" and identifyexecutor()) or "unknown"
+      }
+      _l(_iqru .. "/api/log-execution", d)
+    end,
+
+    
+    [8] = function() -- SOURCE ANTI-TAMPER
+      local function _sc(s)
+        local c = 0
+        if s then
+          for i = 1, #s do
+            c = (c + _byte(s, i) * i) % 4294967295
+          end
+        end
+        return c
+      end
+      local src1 = debug.getinfo(1).source
+      local sum1 = _sc(src1)
+      -- Use a simple loop for wait if task.wait isn't available
+      if typeof(task) == "table" and task.wait then task.wait(0.1) end
+      local src2 = debug.getinfo(1).source
+      local sum2 = _sc(src2)
+      if sum1 ~= sum2 or sum1 == 0 then
+        _gat3("source tampering detected")
+      end
+    end,
+
+    [6] = function(...) -- EXECUTE
+      if _type(_load) ~= "function" then _gat3("no load") end
+      local ok, f = _pcall(_load, _r0wo.src, "KarmaVM")
+      if not ok or _type(f) ~= "function" then _gat3("load failed") end
+      return f(...)
+    end
   }
 
-  const checksum = bytes.reduce((a, b, i) => (a + (b + 1) * ((i % 251) + 1)) % 2147483647, 7);
-  const chunks = [];
-  const chunkSize = strength === 3 ? 20 : strength === 2 ? 28 : 38;
-  for (let i = 0; i < encoded.length; i += chunkSize) chunks.push(encoded.slice(i, i + chunkSize).join(','));
-
-  const names = Array.from({ length: 18 }, () => `_${crypto.randomBytes(3).toString('hex')}`);
-  const [nChar,nByte,nConcat,nLoad,nPcall,nType,nBxor,nBand,nData,nOut,nKey,nSalt,nPrev,nChk,nLen,nHome,nTamper,nWipe] = names;
-  const home = publicBaseUrl();
-
-  return `--[[
-\tProtected By Karma Obfuscation
-\tKarma Protection Legacy Stable
-]]
-
-return(function(...)
-  local ${nChar}=string.char
-  local ${nByte}=string.byte
-  local ${nConcat}=table.concat
-  local ${nLoad}=loadstring or load
-  local ${nPcall}=pcall
-  local ${nType}=type
-  local ${nBxor}=(bit32 and bit32.bxor) or (bit and bit.bxor)
-  local ${nBand}=(bit32 and bit32.band) or (bit and bit.band)
-  local ${nData}={${chunks.join(',')}}
-  local ${nKey}=${key}
-  local ${nSalt}=${salt}
-  local ${nLen}=${bytes.length}
-  local ${nHome}=${JSON.stringify(home)}
-
-  local function ${nTamper}(...)
-    if setclipboard then ${nPcall}(setclipboard,${nHome}) end
-    if warn then ${nPcall}(warn,'Karma Protection anti-tamper triggered: '..${nHome}) end
-    return nil
+  -- Interpreter Loop
+  local _614k
+  while _gqej <= #_y4m2 do
+    local _szk7 = _y4m2[_gqej]
+    local _ci83 = _rrw1[_szk7]
+    if _szk7 == 6 then
+      return _ci83(...)
+    else
+      _ci83()
+    end
+    _gqej = _gqej + 1
   end
-
-  local function ${nWipe}(t)
-    for i=1,#t do t[i]=0 end
-  end
-
-  if ${nType}(${nLoad})~='function' or not ${nBxor} or not ${nBand} then return ${nTamper}(...) end
-
-  local ${nOut}={}
-  local ${nPrev}=${nSalt}
-  for i=1,#${nData} do
-    local enc=${nData}[i]
-    local mask=${nBand}(${nKey}+i*17+(i%7)*31+${nPrev},255)
-    local plain=${nBxor}(enc,mask)
-    ${nOut}[i]=${nChar}(plain)
-    ${nPrev}=${nBand}(enc+${nKey}+i,255)
-  end
-
-  local src=${nConcat}(${nOut})
-  if #src~=${nLen} then ${nWipe}(${nData}); ${nWipe}(${nOut}); return ${nTamper}(...) end
-
-  local ${nChk}=7
-  for i=1,#src do
-    local b=${nByte}(src,i)
-    ${nChk}=(${nChk}+((b+1)*(((i-1)%251)+1)))%2147483647
-  end
-  if ${nChk}~=${checksum} then ${nWipe}(${nData}); ${nWipe}(${nOut}); return ${nTamper}(...) end
-
-  local ok,fn=${nPcall}(${nLoad},src,'KarmaProtected')
-  ${nWipe}(${nData}); ${nWipe}(${nOut})
-  if not ok or ${nType}(fn)~='function' then return ${nTamper}(...) end
-  return fn(...)
 end)(...)
 `;
 }
 
 async function callObfuscator(luaCode, level = 'standard') {
+  // Calls the Karma Obfuscator API to obfuscate the given Lua code.
   const selected = String(level || 'standard').toLowerCase();
-  if (selected === 'light') return kers0neLocalObfuscate(luaCode, { strength: 1 });
-  if (selected === 'max' || selected === 'maximum') {
-    return kers0neLocalObfuscate(kers0neLocalObfuscate(luaCode, { strength: 3 }), { strength: 3 });
+  const apiUrl = (OBFUSCATOR_API_URL || 'https://luarmor-bot-1-0yt4.onrender.com').replace(/\/$/, '') + '/api/obfuscate';
+
+  const res = await fetch(apiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: String(luaCode || ''), level: selected })
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.status.toString());
+    throw new Error(`Karma Obfuscator API error (${res.status}): ${text.slice(0, 200)}`);
   }
-  return kers0neLocalObfuscate(luaCode, { strength: 2 });
+
+  const data = await res.json();
+  if (!data.ok || typeof data.obfuscated !== 'string') {
+    throw new Error(`Karma Obfuscator API returned an error: ${data.error || JSON.stringify(data).slice(0, 200)}`);
+  }
+
+  return data.obfuscated;
 }
+
+
 
 function verifyAdmin(member, settings) {
   if (!member) return false;
@@ -765,6 +820,7 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
+// Prevent duplicate replies if Discord/hosting sends the same interaction twice.
 const processedInteractions = new Set();
 
 function panelEmbed(guildId, sentBy = null) {
@@ -775,9 +831,9 @@ function panelEmbed(guildId, sentBy = null) {
   return new EmbedBuilder()
     .setTitle(title)
     .setDescription(description)
-    .setColor(0xd4af37)
-    .setThumbnail(`https://files.catbox.moe/vda6a2.png`)
-    .setFooter({ text: sentBy ? `Sent By ${sentBy} • Karma Protection` : 'Karma Protection', iconURL: `https://files.catbox.moe/vda6a2.png` });
+    .setColor(0xe3b944)
+    .setThumbnail(`${publicBaseUrl()}/assets/karma-logo.png`)
+    .setFooter({ text: sentBy ? `Sent By ${sentBy} • Karma Protection` : 'Karma Protection', iconURL: `${publicBaseUrl()}/assets/karma-logo.png` });
 }
 
 function panelButtons() {
@@ -799,21 +855,24 @@ function panelButtons() {
 
 function keySystemEmbed(guildId) {
   const settings = getSettings(guildId);
-  const rawColor = settings?.key_system_color || '#d4af37';
-  const color = /^#[0-9a-fA-F]{6}$/.test(rawColor) ? parseInt(rawColor.slice(1), 16) : 0xd4af37;
+  const rawColor = settings?.key_system_color || '#5865F2';
+  const color = /^#[0-9a-fA-F]{6}$/.test(rawColor) ? parseInt(rawColor.slice(1), 16) : 0x5865F2;
   return new EmbedBuilder()
     .setTitle(settings?.key_system_title || 'Karma Key System')
     .setDescription(settings?.key_system_description || 'Enter your license key to unlock access')
     .setColor(color)
-    .setThumbnail(`https://files.catbox.moe/vda6a2.png`)
+    .setThumbnail(`${publicBaseUrl()}/assets/karma-logo.png`)
     .addFields(
       { name: 'How to Redeem', value: 'Click Redeem Key on the main panel and enter your license key.' },
       { name: 'HWID Locking', value: 'Your key locks to your first device. Reset HWID has a cooldown.' }
     )
-    .setFooter({ text: 'Karma Protection Key System', iconURL: `https://files.catbox.moe/vda6a2.png` });
+    .setFooter({ text: 'Karma Protection Key System', iconURL: `${publicBaseUrl()}/assets/karma-logo.png` });
 }
 
+
 async function logGuild(guild, text) {
+  // Disabled by default so commands do not appear to send two messages.
+  // If you want separate log messages later, set ENABLE_COMMAND_LOGS=true in Render.
   if (process.env.ENABLE_COMMAND_LOGS !== 'true') return;
   const settings = getSettings(guild.id);
   if (!settings || !settings.log_channel_id) return;
@@ -950,6 +1009,7 @@ async function handleCommand(interaction) {
     };
     upsertSettings(interaction.guildId, patch);
 
+    // Only ONE Discord response: the panel itself. No channel.send + confirmation.
     const panelMessage = await interaction.reply({
       embeds: [panelEmbed(interaction.guildId, interaction.user.username)],
       components: panelButtons(),
@@ -1057,7 +1117,7 @@ async function handleCommand(interaction) {
     const sub = interaction.options.getSubcommand(false);
     if (sub === 'create') {
       const name = interaction.options.getString('name', true);
-      const color = interaction.options.getString('color') || '#d4af37';
+      const color = interaction.options.getString('color') || '#5865F2';
       const title = interaction.options.getString('title') || 'Karma Key System';
       const description = interaction.options.getString('description') || 'Enter your license key to unlock access';
       const id = makeId('keytpl');
@@ -1271,7 +1331,7 @@ async function handleCommand(interaction) {
     const script = db.prepare('SELECT * FROM scripts WHERE id = ? AND guild_id = ?').get(scriptId, interaction.guildId);
     if (!script) return interaction.reply({ ephemeral: true, content: 'Invalid script ID.' });
     const apiPort = process.env.PORT || process.env.API_PORT || 3000;
-    const example = `-- Generic Lua example. Change request/http_request for your environment.\nlocal key = "PASTE_USER_KEY"\nlocal hwid = "PUT_HWID_HERE"\nlocal apiUrl = "https://YOUR-RENDER-URL.onrender.com/api/verify"\n\nlocal body = '{"script_id":"${scriptId}","key":"' .. key .. '","hwid":"' .. hwid .. '"}"'\n\nlocal res = request({\n  Url = apiUrl,\n  Method = "POST",\n  Headers = {\n    ["Content-Type"] = "application/json",\n    ["X-API-Secret"] = "PASTE_SCRIPT_API_SECRET"\n  },\n  Body = body\n})\n\nprint(res.Body)`;
+    const example = `-- Generic Lua example. Change request/http_request for your environment.\nlocal key = "PASTE_USER_KEY"\nlocal hwid = "PUT_HWID_HERE"\nlocal apiUrl = "https://YOUR-RENDER-URL.onrender.com/api/verify"\n\nlocal body = '{"script_id":"${scriptId}","key":"' .. key .. '","hwid":"' .. hwid .. '"}'\n\nlocal res = request({\n  Url = apiUrl,\n  Method = "POST",\n  Headers = {\n    ["Content-Type"] = "application/json",\n    ["X-API-Secret"] = "PASTE_SCRIPT_API_SECRET"\n  },\n  Body = body\n})\n\nprint(res.Body)`;
     return interaction.reply({ ephemeral: true, content: `\`\`\`lua\n${example}\n\`\`\`` });
   }
 }
@@ -1285,6 +1345,7 @@ async function sendMyKeys(interaction, userId) {
   if (interaction.deferred || interaction.replied) await interaction.followUp({ ephemeral: true, content });
   else await interaction.reply({ ephemeral: true, content });
 }
+
 
 async function sendHostedScripts(interaction) {
   const settings = getSettings(interaction.guildId);
@@ -1408,18 +1469,17 @@ function kolsecHomePage() {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Karma Protection — Lua Code Protection & Licensing</title>
   <meta name="description" content="Karma Protection protects Lua code with obfuscation, HWID-locked keys, hosted loadstrings, and a Discord synced panel." />
-  <link rel="icon" href="https://files.catbox.moe/vda6a2.png" />
   <style>
-    :root{--bg:#030303;--card:#0b0b0c;--muted:#a1a1aa;--line:#242428;--text:#f8fafc;--gold:#d4af37;--gold2:#f1d592;--soft:#151518}
-    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 50% -8%,rgba(212,175,55,0.16),transparent 30%),#030303;color:var(--text);font-family:"SF Pro Display","Aptos","Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.01em}body:before{content:'';position:fixed;right:-170px;bottom:-170px;width:620px;height:620px;background:url('https://files.catbox.moe/vda6a2.png') center/contain no-repeat;opacity:.045;pointer-events:none}.grid{position:fixed;inset:0;background-image:linear-gradient(rgba(255,255,255,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.055) 1px,transparent 1px);background-size:64px 64px;mask-image:linear-gradient(to bottom,#000,transparent 82%);pointer-events:none}a{color:inherit;text-decoration:none}.container{width:min(1180px,92%);margin:auto}header{position:sticky;top:0;z-index:40;border-bottom:1px solid rgba(212,175,55,.2);background:rgba(3,3,3,.82);backdrop-filter:blur(18px)}.nav{height:64px;display:flex;align-items:center;justify-content:space-between}.brand{position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;font-weight:780}.brand img{width:34px;height:34px;border-radius:10px;object-fit:cover;border:1px solid rgba(212,175,55,.5)}.beta{font:10px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;border:1px solid #2d2d32;border-radius:5px;padding:2px 6px;color:#b6b6bd}.menu{width:38px;height:38px;display:grid;place-items:center;border:1px solid #2b2b30;border-radius:10px;background:rgba(255,255,255,.03);color:#fff}.btn{display:inline-flex;align-items:center;gap:10px;border-radius:10px;border:1px solid rgba(212,175,55,.4);background:rgba(255,255,255,.055);padding:13px 18px;font:800 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;color:#fff}.btn.primary{background:linear-gradient(135deg,#d4af37,#f1d592);color:#050505;border-color:#d4af37;box-shadow:0 0 40px rgba(212,175,55,.3)}.hero{position:relative;text-align:center;padding:105px 0 80px}.pill{display:inline-flex;gap:10px;align-items:center;border:1px solid rgba(212,175,55,.4);background:rgba(255,255,255,.045);border-radius:999px;padding:8px 13px;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#d4d4d8}.pulse{width:7px;height:7px;border-radius:50%;background:#d4af37;box-shadow:0 0 18px #d4af37}.hero h1{font-size:clamp(50px,8vw,104px);line-height:1.02;letter-spacing:-.075em;margin:26px auto 18px;max-width:930px}.glow{text-shadow:0 0 32px rgba(212,175,55,.34)}.hero p{max-width:680px;margin:0 auto;color:#a1a1aa;font:500 15px/1.8 ui-monospace,monospace}.actions{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin-top:34px}.heroVideo{margin:56px auto 0;max-width:860px;border:1px solid rgba(212,175,55,.2);border-radius:24px;overflow:hidden;background:linear-gradient(180deg,#111,#070707);box-shadow:0 0 80px rgba(212,175,55,.08)}.fakeVideo{aspect-ratio:16/9;display:grid;place-items:center;background:radial-gradient(circle at 50% 40%,rgba(212,175,55,.18),transparent 20%),linear-gradient(135deg,#050505,#151515,#050505);background-size:160% 160%;animation:shift 7s infinite alternate}.fakeVideo img{width:110px;height:110px;border-radius:28px;object-fit:cover;opacity:.9}@keyframes shift{to{background-position:100% 60%}}.caption{padding:14px;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#d4af37}.section{border-top:1px solid rgba(212,175,55,.1);padding:88px 0}.sectionHead{max-width:720px;margin-bottom:34px}.kicker{font:800 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#d4af37;margin-bottom:10px}.section h2{font-size:clamp(34px,5vw,58px);line-height:1.02;letter-spacing:-.055em;margin:0}.muted{color:#a1a1aa}.features{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.card{border:1px solid rgba(212,175,55,.2);border-radius:28px;background:rgba(15,15,16,.72);padding:26px;transition:.2s ease;box-shadow:inset 0 1px 0 rgba(212,175,55,.035)}.card:hover{border-color:rgba(212,175,55,.5);transform:translateY(-2px);box-shadow:0 0 60px rgba(212,175,55,.07)}.icon{width:38px;height:38px;display:grid;place-items:center;border:1px solid rgba(212,175,55,.3);border-radius:12px;margin-bottom:16px;color:#d4af37}.card h3{margin:0 0 8px;font-size:18px;color:#f0f0f0}.card p{margin:0;color:#a1a1aa;font:500 12px/1.7 ui-monospace,monospace}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.stat{border:1px solid rgba(212,175,55,.2);border-radius:18px;background:rgba(15,15,16,.65);padding:22px;display:flex;gap:15px;align-items:center}.num{font-size:34px;font-weight:850;color:#d4af37}.pricing{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid rgba(212,175,55,.2);border-radius:28px;overflow:hidden;background:rgba(15,15,16,.45)}.plan{padding:32px}.plan+ .plan{border-left:1px solid rgba(212,175,55,.2);background:rgba(255,255,255,.035)}.price{font-size:64px;font-weight:900;letter-spacing:-.06em;color:#d4af37}.plan ul{list-style:none;padding:0;margin:22px 0;display:grid;gap:13px}.plan li:before{content:'✓';margin-right:10px;color:#d4af37}.cta{text-align:center;max-width:760px;margin:auto}.footer{border-top:1px solid rgba(212,175,55,.1);padding:34px 0;color:#777;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}.footer a{color:#d4af37}@media(max-width:850px){.features,.stats,.pricing{grid-template-columns:1fr}.plan+.plan{border-left:0;border-top:1px solid rgba(212,175,55,.2)}.brand{position:static;transform:none}.nav{gap:12px}.hero{text-align:left}.actions{justify-content:flex-start}}
+    :root{--bg:#030303;--card:rgba(15,15,16,0.85);--muted:#a1a1aa;--line:rgba(212,175,55,0.2);--text:#f8fafc;--primary:#d4af37;--soft:#151518;--gold:#d4af37}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:linear-gradient(rgba(0,0,0,0.7),rgba(0,0,0,0.7)),url("/assets/bg.png") center/cover fixed no-repeat,#030303;color:var(--text);font-family:"SF Pro Display","Aptos","Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.01em}body:before{content:'';position:fixed;right:-170px;bottom:-170px;width:620px;height:620px;background:url('/assets/karma-logo.png') center/contain no-repeat;opacity:.045;filter:grayscale(1);pointer-events:none}.grid{position:fixed;inset:0;background-image:linear-gradient(rgba(255,255,255,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.055) 1px,transparent 1px);background-size:64px 64px;mask-image:linear-gradient(to bottom,#000,transparent 82%);pointer-events:none}a{color:inherit;text-decoration:none}.container{width:min(1180px,92%);margin:auto}header{position:sticky;top:0;z-index:40;border-bottom:1px solid rgba(255,255,255,.12);background:rgba(3,3,3,.82);backdrop-filter:blur(18px)}.nav{height:64px;display:flex;align-items:center;justify-content:space-between}.brand{position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;font-weight:780}.brand img{width:34px;height:34px;border-radius:10px;object-fit:cover;border:1px solid rgba(212,175,55,0.5)}.beta{font:10px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;border:1px solid #2d2d32;border-radius:5px;padding:2px 6px;color:#b6b6bd}.menu{width:38px;height:38px;display:grid;place-items:center;border:1px solid #2b2b30;border-radius:10px;background:rgba(255,255,255,.03);color:#fff}.btn{display:inline-flex;align-items:center;gap:10px;border-radius:10px;border:1px solid rgba(212,175,55,0.4);background:rgba(255,255,255,.055);padding:13px 18px;font:800 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;color:#fff}.btn.primary{background:#fff;color:#050505;border-color:#fff;box-shadow:0 0 40px rgba(255,255,255,.14)}.hero{position:relative;text-align:center;padding:105px 0 80px}.pill{display:inline-flex;gap:10px;align-items:center;border:1px solid rgba(212,175,55,0.4);background:rgba(255,255,255,.045);border-radius:999px;padding:8px 13px;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#d4d4d8}.pulse{width:7px;height:7px;border-radius:50%;background:#fff;box-shadow:0 0 18px #fff}.hero h1{font-size:clamp(50px,8vw,104px);line-height:1.02;letter-spacing:-.075em;margin:26px auto 18px;max-width:930px}.glow{text-shadow:0 0 32px rgba(255,255,255,.34)}.hero p{max-width:680px;margin:0 auto;color:#a1a1aa;font:500 15px/1.8 ui-monospace,monospace}.actions{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin-top:34px}.heroVideo{margin:56px auto 0;max-width:860px;border:1px solid rgba(255,255,255,.16);border-radius:24px;overflow:hidden;background:linear-gradient(180deg,#111,#070707);box-shadow:0 0 80px rgba(255,255,255,.08)}.fakeVideo{aspect-ratio:16/9;display:grid;place-items:center;background:radial-gradient(circle at 50% 40%,rgba(255,255,255,.18),transparent 20%),linear-gradient(135deg,#050505,#151515,#050505);background-size:160% 160%;animation:shift 7s infinite alternate}.fakeVideo img{width:110px;height:110px;border-radius:28px;object-fit:cover;filter:grayscale(1);opacity:.9}@keyframes shift{to{background-position:100% 60%}}.caption{padding:14px;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#888}.section{border-top:1px solid rgba(255,255,255,.10);padding:88px 0}.sectionHead{max-width:720px;margin-bottom:34px}.kicker{font:800 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#fff;margin-bottom:10px}.section h2{font-size:clamp(34px,5vw,58px);line-height:1.02;letter-spacing:-.055em;margin:0}.muted{color:#a1a1aa}.features{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.card{border:1px solid rgba(255,255,255,.13);border-radius:28px;background:rgba(15,15,16,.72);padding:26px;transition:.2s ease;box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}.card:hover{border-color:rgba(255,255,255,.35);transform:translateY(-2px);box-shadow:0 0 60px rgba(255,255,255,.07)}.icon{width:38px;height:38px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.18);border-radius:12px;margin-bottom:16px}.card h3{margin:0 0 8px;font-size:18px}.card p{margin:0;color:#a1a1aa;font:500 12px/1.7 ui-monospace,monospace}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.stat{border:1px solid rgba(255,255,255,.13);border-radius:18px;background:rgba(15,15,16,.65);padding:22px;display:flex;gap:15px;align-items:center}.num{font-size:34px;font-weight:850}.pricing{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid rgba(255,255,255,.13);border-radius:28px;overflow:hidden;background:rgba(15,15,16,.45)}.plan{padding:32px}.plan+ .plan{border-left:1px solid rgba(255,255,255,.13);background:rgba(255,255,255,.035)}.price{font-size:64px;font-weight:900;letter-spacing:-.06em}.plan ul{list-style:none;padding:0;margin:22px 0;display:grid;gap:13px}.plan li:before{content:'✓';margin-right:10px}.cta{text-align:center;max-width:760px;margin:auto}.footer{border-top:1px solid rgba(255,255,255,.10);padding:34px 0;color:#777;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}@media(max-width:850px){.features,.stats,.pricing{grid-template-columns:1fr}.plan+.plan{border-left:0;border-top:1px solid rgba(255,255,255,.13)}.brand{position:static;transform:none}.nav{gap:12px}.hero{text-align:left}.actions{justify-content:flex-start}}
   </style>
 </head>
 <body>
   <div class="grid"></div>
-  <header><div class="container nav"><a class="menu" href="#features">☰</a><a class="brand" href="/"><img src="https://files.catbox.moe/vda6a2.png" alt="Karma Protection"><span>Karma Protection</span><span class="beta">beta</span></a><a class="btn" href="${DISCORD_INVITE_URL}">Discord</a></div></header>
+  <header><div class="container nav"><a class="menu" href="#features">☰</a><a class="brand" href="/"><img src="/assets/karma-logo.png" alt="Karma Protection"><span>Karma Protection</span><span class="beta">beta</span></a><a class="btn" href="${DISCORD_INVITE_URL}">Discord</a></div></header>
   <main>
-    <section class="hero"><div class="container"><a class="pill" href="#builds"><span class="pulse"></span>The gold standard for Lua security</a><h1>Protect. <span class="glow">Monetize.</span> Earn.</h1><p>Drop your project, get a secure build, and monetize with confidence. HWID-lock, whitelist keys, obfuscate, and ship straight from Discord.</p><div class="actions"><a class="btn primary" href="/login">Enter the lab</a><a class="btn" href="/dashboard?tab=obfuscate">Obfuscator</a><a class="btn" href="#features">Explore features</a></div><figure class="heroVideo"><div class="fakeVideo"><img src="https://files.catbox.moe/vda6a2.png" alt="Karma Protection"></div><figcaption class="caption">Create a protected script in seconds.</figcaption></figure></div></section>
-    <section id="features" class="section"><div class="container"><div class="sectionHead"><div class="kicker">Karma Protection features</div><h2>Everything you need to ship and protect.</h2></div><div class="features"><div class="card"><div class="icon">⚙️</div><h3>Custom Obfuscator</h3><p>Multi-layer local protection with anti-tamper checks, encoded payloads, and protected loadstrings.</p></div><div class="card"><div class="icon">🔑</div><h3>Whitelist System</h3><p>Hand out keys, let clients redeem, revoke, extend, and reset HWID access.</p></div><div class="card"><div class="icon">🤖</div><h3>Discord Bot</h3><p>Panels, script hosting, key generation, HWID bans, and API linking from Discord.</p></div><div class="card"><div class="icon">📊</div><h3>Dashboard</h3><p>Scripts, protected builds, upload files, users, owner tools, and live status in one place.</p></div><div class="card"><div class="icon">🆔</div><h3>HWID Tracker</h3><p>Lock each key to a single device on first run. Reset or ban HWIDs anytime.</p></div><div class="card"><div class="icon">📦</div><h3>Protected Loadstrings</h3><p>Served through a protected loader route so the raw endpoint is not exposed in the panel.</p></div></div></div></section>
+    <section class="hero"><div class="container"><a class="pill" href="#builds"><span class="pulse"></span>The black & white standard for Lua security</a><h1>Protect. <span class="glow">Monetize.</span> Earn.</h1><p>Drop your project, get a secure build, and monetize with confidence. HWID-lock, whitelist keys, obfuscate, and ship straight from Discord.</p><div class="actions"><a class="btn primary" href="/login">Enter the lab</a><a class="btn" href="/dashboard?tab=obfuscate">Obfuscator</a><a class="btn" href="#features">Explore features</a></div><figure class="heroVideo"><div class="fakeVideo"><img src="/assets/karma-logo.png" alt="Karma Protection"></div><figcaption class="caption">Create a protected script in seconds.</figcaption></figure></div></section>
+    <section id="features" class="section"><div class="container"><div class="sectionHead"><div class="kicker">Karma Protection features</div><h2>Everything you need to ship and protect.</h2></div><div class="features"><div class="card"><div class="icon">CPU</div><h3>Custom Obfuscator</h3><p>Multi-layer local protection with anti-tamper checks, encoded payloads, and protected loadstrings.</p></div><div class="card"><div class="icon">KEY</div><h3>Whitelist System</h3><p>Hand out keys, let clients redeem, revoke, extend, and reset HWID access.</p></div><div class="card"><div class="icon">BOT</div><h3>Discord Bot</h3><p>Panels, script hosting, key generation, HWID bans, and API linking from Discord.</p></div><div class="card"><div class="icon">DASH</div><h3>Dashboard</h3><p>Scripts, protected builds, upload files, users, owner tools, and live status in one place.</p></div><div class="card"><div class="icon">ID</div><h3>HWID Tracker</h3><p>Lock each key to a single device on first run. Reset or ban HWIDs anytime.</p></div><div class="card"><div class="icon">LOAD</div><h3>Protected Loadstrings</h3><p>Served through a protected loader route so the raw endpoint is not exposed in the panel.</p></div></div></div></section>
     <section id="builds" class="section"><div class="container"><div class="sectionHead"><div class="kicker">latest builds</div><h2>Shipping every week.</h2><p class="muted">Recent protections and platform improvements.</p></div><div class="features"><div class="card"><div class="kicker">v1.76.005</div><h3>Anti-dump hardening</h3><p>Payloads use runtime checks and decoys so dumped files come back useless.</p></div><div class="card"><div class="kicker">v1.76.004</div><h3>Loader execution recovery</h3><p>Protected loadstrings now fetch and execute through the /loadstring route.</p></div><div class="card"><div class="kicker">v1.76.003</div><h3>Runtime integrity</h3><p>Reduced fingerprinting and strengthened payload integrity checks.</p></div></div></div></section>
     <section class="section"><div class="container"><div class="stats"><div class="stat"><div class="num">${scriptCount}</div><div><b>projects created</b><br><span class="muted">script products</span></div></div><div class="stat"><div class="num">${hostedCount}</div><div><b>scripts protected</b><br><span class="muted">hosted builds</span></div></div><div class="stat"><div class="num">${keyCount}</div><div><b>keys issued</b><br><span class="muted">license keys</span></div></div></div></div></section>
     <section id="pricing" class="section"><div class="container"><div class="sectionHead" style="text-align:center;margin-inline:auto"><div class="kicker">pricing</div><h2>Simple plans. Real protection.</h2></div><div class="pricing"><div class="plan"><div class="kicker">Citizen</div><div class="price">$0</div><p class="muted">forever</p><ul><li>Discord bot + panel deploy</li><li>Whitelist keys</li><li>Standard obfuscation</li><li>20 scripts by default</li></ul><a class="btn" href="/login">Get Started Free</a></div><div class="plan"><div class="kicker">Royal</div><div class="price">$3</div><p class="muted">month</p><ul><li>Higher script limits</li><li>Maximum obfuscation</li><li>Priority builds</li><li>Owner controlled upgrades</li></ul><a class="btn primary" href="/login">Upgrade</a></div></div></div></section>
@@ -1437,7 +1497,7 @@ function makeUserApiKey(userId) {
 
 function discordDashboardPage(user, req = { query: {} }) {
   const username = escapeHtml(user.global_name || user.username || 'Discord User');
-  const avatar = user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=128` : 'https://files.catbox.moe/vda6a2.png';
+  const avatar = user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=128` : '/assets/karma-logo.png';
   const apiKey = makeUserApiKey(user.id);
   let tab = String(req.query.tab || 'overview');
   if (['keys','how','tutorials','redeem','settings','discord','sources','storage'].includes(tab)) tab = 'overview';
@@ -1458,7 +1518,7 @@ function discordDashboardPage(user, req = { query: {} }) {
 
   let content = '';
   if (tab === 'scripts') {
-    content = selected ? `<div class="card"><div class="cardHead"><div><p class="eyebrow">Selected Script</p><h2>${escapeHtml(selected.name)}</h2><p class="muted">${selected.obfuscated ? 'Obfuscated build · edits auto re-obfuscate on save' : 'Plain build'} · ${escapeHtml(selected.created_at)}</p></div></div><h3>Loadstring</h3><code class="block">${makeLoaderSnippet(selected.id)}</code>${canEditSelected ? `<h3>Edit Script</h3><form method="post" action="/dashboard/scripts/${selected.id}/update"><label>Script name</label><input name="name" maxlength="80" value="${escapeHtml(selected.name)}" required><label>Actual Source</label><textarea name="code" maxlength="4000" required>${escapeHtml(selected.source_code || selected.code)}</textarea><label class="check"><input type="checkbox" name="obfuscate" value="true" ${selected.obfuscated ? 'checked' : ''}> Obfuscate on save</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><label>Key System ID</label><input name="key_system_id" placeholder="Optional key system ID" value="${escapeHtml(selected.key_system_id || '')}"><div class="buttonRow"><button type="submit">Save Permanently</button><button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate</button></div></form>` : `<p class="muted">This script is available as a loadstring. Source editing is limited to the owner/creator.</p>`}</div>` + `<div class="card"><p class="eyebrow">Add Script</p><h2>Permanent script upload</h2><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><label>Key System ID</label><input name="key_system_id" placeholder="Optional key system ID"><button>Save Script</button></form></div>` : `<div class="card"><h2>Scripts</h2><p class="muted">Add your first script below. Scripts are saved permanently unless the owner removes them from the database.</p></div><div class="card"><p class="eyebrow">Add Script</p><h2>Permanent script upload</h2><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><label>Key System ID</label><input name="key_system_id" placeholder="Optional key system ID"><button>Save Script</button></form></div>`;
+    content = selected ? `<div class="card"><div class="cardHead"><div><p class="eyebrow">Selected Script</p><h2>${escapeHtml(selected.name)}</h2><p class="muted">${selected.obfuscated ? 'Obfuscated build · edits auto re-obfuscate on save' : 'Plain build'} · ${escapeHtml(selected.created_at)}</p></div></div><h3>Loadstring</h3><code class="block">${makeLoaderSnippet(selected.id)}</code>${canEditSelected ? `<h3>Edit Script</h3><form method="post" action="/dashboard/scripts/${selected.id}/update"><label>Script name</label><input name="name" maxlength="80" value="${escapeHtml(selected.name)}" required><label>Actual Source</label><textarea name="code" maxlength="4000" required>${escapeHtml(selected.source_code || selected.code)}</textarea><label class="check"><input type="checkbox" name="obfuscate" value="true" ${selected.obfuscated ? 'checked' : ''}> Obfuscate on save</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><div class="buttonRow"><button type="submit">Save Permanently</button><button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate</button></div></form>` : `<p class="muted">This script is available as a loadstring. Source editing is limited to the owner/creator.</p>`}</div>` + `<div class="card"><p class="eyebrow">Add Script</p><h2>Permanent script upload</h2><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><button>Save Script</button></form></div>` : `<div class="card"><h2>Scripts</h2><p class="muted">Add your first script below. Scripts are saved permanently unless the owner removes them from the database.</p></div><div class="card"><p class="eyebrow">Add Script</p><h2>Permanent script upload</h2><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><label>Actual Source</label><textarea id="codeBox" name="code" maxlength="4000" required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before saving</label><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><button>Save Script</button></form></div>`;
   } else if (tab === 'sources') {
     content = `<div class="card"><p class="eyebrow">Sources</p><h2>Create a hosted script</h2><p class="muted">Upload a Lua or text file, or paste source manually. Obfuscation can run before hosting.</p><form method="post" action="/dashboard/scripts"><label>Script name</label><input name="name" maxlength="80" placeholder="Main Loader" required><label>Upload file</label><input id="fileInput" type="file" accept=".lua,.txt,text/plain"><p class="hint">File contents will be placed into the source box below.</p><label>Source code</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("Karma Protection")' required></textarea><label class="check"><input type="checkbox" name="obfuscate" value="true"> Obfuscate before hosting</label><label>Obfuscation level</label><select name="level"><option value="light">Light</option><option value="standard" selected>Standard</option><option value="max">Maximum</option></select><div class="buttonRow"><button type="submit">Host Script</button><button class="secondary" type="submit" formaction="/dashboard/obfuscate" formmethod="post">Obfuscate Only</button></div></form></div>`;
   } else if (tab === 'keys') {
@@ -1473,7 +1533,7 @@ function discordDashboardPage(user, req = { query: {} }) {
       content = `<div class="card"><p class="eyebrow">Owner Storage</p><h2>Script Storage</h2><p class="muted">Owner account has unlimited scripts. Add global scripts here and use them in panels/loadstrings.</p><form method="post" action="/owner/storage"><label>Name</label><input name="name" maxlength="80" required><label>Source</label><textarea name="code" maxlength="4000" required></textarea><label>Obfuscation level</label><select name="level"><option value="standard">Standard</option><option value="max">Maximum</option></select><label class="check"><input type="checkbox" name="obfuscate" value="true" checked> Obfuscate before storing</label><button>Add Stored Script</button></form><h3>Stored Scripts</h3>${stored.map(r=>`<div class="row"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.id)} · ${r.obfuscated ? 'Obfuscated' : 'Plain'}</small><code class="block">${makeLoaderSnippet(r.id)}</code></div>`).join('') || '<p class="muted">No stored scripts.</p>'}</div>`;
     }
   } else if (tab === 'obfuscate') {
-    content = `<div class="card"><p class="eyebrow">Obfuscator</p><h2>Protect Lua source</h2><p class="muted">Karma Obfuscation with randomized locals, rolling XOR, checksum validation, and anti-tamper fallback.</p><form method="post" action="/dashboard/obfuscate"><label>Filename</label><input name="filename" value="obfuscated.lua"><label>Lua source</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("protect me")' required></textarea><label>Obfuscation level</label><select name="level"><option value="light">Light</option><option value="standard" selected>Standard</option><option value="max">Maximum</option></select><div class="buttonRow"><button type="submit">Obfuscate</button><a class="btn dark" href="/dashboard?tab=scripts">Scripts</a></div></form><div class="featureGrid"><div>Anti-tamper checksum</div><div>Anti-Dump Hardening on new builds</div><div>Rolling XOR byte encoding</div><div>Decoy layer for automated dumps</div><div>Random local names</div><div>Protected output banner</div></div></div>`;
+    content = `<div class="card"><p class="eyebrow">Obfuscator</p><h2>Protect Lua source</h2><p class="muted">Kers0ne-style protected wrapper with randomized locals, rolling XOR, checksum validation, and anti-tamper fallback.</p><form method="post" action="/dashboard/obfuscate"><label>Filename</label><input name="filename" value="obfuscated.lua"><label>Lua source</label><textarea id="codeBox" name="code" maxlength="4000" placeholder='print("protect me")' required></textarea><label>Obfuscation level</label><select name="level"><option value="light">Light</option><option value="standard" selected>Standard</option><option value="max">Maximum</option></select><div class="buttonRow"><button type="submit">Obfuscate</button><a class="btn dark" href="/dashboard?tab=scripts">Scripts</a></div></form><div class="featureGrid"><div>Anti-tamper checksum</div><div>Anti-Dump Hardening on new builds</div><div>Rolling XOR byte encoding</div><div>Decoy layer for automated dumps</div><div>Random local names</div><div>Protected output banner</div></div></div>`;
   } else if (tab === 'how') {
     content = `<div class="card"><p class="eyebrow">How It Works</p><h2>Complete workflow</h2><div class="stepsDash"><div><span>1</span><b>Upload source</b><p>Go to Sources and upload a Lua file or paste code.</p></div><div><span>2</span><b>Obfuscate or host</b><p>Enable obfuscation and create a hosted loadstring.</p></div><div><span>3</span><b>Link Discord</b><p>Run <code>/link api key:${apiKey}</code> in your server.</p></div><div><span>4</span><b>Generate keys</b><p>Use <code>/generatekey</code> and the panel for buyers.</p></div></div></div>`;
   } else if (tab === 'tutorials') {
@@ -1494,7 +1554,7 @@ function discordDashboardPage(user, req = { query: {} }) {
     content = `<div class="card heroCard"><p class="eyebrow">Overview</p><h2>Dashboard</h2><p class="muted">Manage scripts, sources, obfuscation, tutorials, Discord links, redeem codes, and owner tools from one clean dashboard.</p><div class="stats"><div class="stat"><div class="num">${scripts.length}</div><span>Scripts used</span></div><div class="stat"><div class="num">${remaining}</div><span>Slots left</span></div><div class="stat"><div class="num">${scriptQuota}</div><span>Max scripts</span></div></div><div class="anime"></div></div>`;
   }
 
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma Dashboard</title><style>:root{--bg:#000000;--shell:#0b0b0c;--panel:#101011;--panel2:#151516;--line:#2a2a2d;--muted:#a1a1aa;--text:#f8fafc;--gold:#d4af37;--gold2:#f1d592}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -10%,rgba(212,175,55,.22),transparent 30%),radial-gradient(circle at 85% 25%,rgba(212,175,55,.07),transparent 24%),#000000;color:var(--text);font-family:"SF Pro Display","Aptos","Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.01em}body:before{content:'';position:fixed;right:-140px;bottom:-140px;width:560px;height:560px;background:url('https://files.catbox.moe/vda6a2.png') center/contain no-repeat;opacity:.045;pointer-events:none}a{color:inherit;text-decoration:none}.page{padding:28px}.shell{max-width:1500px;margin:0 auto;min-height:calc(100vh - 56px);display:grid;grid-template-columns:280px 270px 1fr;border:1px solid rgba(212,175,55,0.4);border-radius:34px;overflow:hidden;background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.015));box-shadow:0 34px 140px rgba(0,0,0,.58),0 0 0 1px rgba(255,255,255,.025)}.side{background:linear-gradient(180deg,rgba(12,12,12,.96),rgba(5,5,5,.96));border-right:1px solid rgba(255,255,255,.20);padding:22px;overflow:auto;box-shadow:18px 0 80px rgba(0,0,0,.28)}.brand{display:flex;gap:12px;align-items:center;border-bottom:1px solid #242427;padding-bottom:20px}.brand img,.avatar{width:48px;height:48px;border-radius:16px;object-fit:cover;border:1px solid rgba(212,175,55,0.6);box-shadow:0 0 35px rgba(212,175,55,0.3)}.brand b{display:block;font-size:18px;font-weight:850}.brand small,.muted,small{color:var(--muted)}.nav{margin-top:20px}.nav a{display:flex;align-items:center;padding:12px 13px;border-radius:14px;color:#d4d4d8;font-weight:720;margin-bottom:4px}.nav a:hover,.nav a.active{background:linear-gradient(90deg,rgba(255,255,255,.18),rgba(255,255,255,.035));color:#fff;box-shadow:inset 3px 0 0 var(--gold)}.scriptsPane{background:rgba(7,7,7,.78);border-right:1px solid rgba(255,255,255,.16);padding:20px;overflow:auto}.scriptLink{display:block;border:1px solid rgba(255,255,255,.14);background:rgba(14,14,14,.86);border-radius:16px;padding:13px;margin-bottom:10px}.scriptLink.active{border-color:var(--gold);background:linear-gradient(180deg,rgba(255,255,255,.14),rgba(18,18,18,.88));box-shadow:0 10px 34px rgba(255,255,255,.08)}.main{padding:28px;min-width:0;position:relative;overflow:hidden}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.profile{display:flex;gap:12px;align-items:center}.card{border:1px solid rgba(255,255,255,.16);border-radius:28px;background:linear-gradient(180deg,rgba(24,24,24,.92),rgba(8,8,8,.97));padding:28px;box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 26px 90px rgba(0,0,0,.32);margin-bottom:18px;position:relative;z-index:1}.card h2{font-size:clamp(32px,4vw,56px);line-height:.95;letter-spacing:-.06em;margin:6px 0 12px}.eyebrow{color:#a1a1aa;text-transform:uppercase;letter-spacing:.18em;font-size:12px;font-weight:850;margin:0 0 8px}.btn,button{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--gold2);background:linear-gradient(180deg,var(--gold2),var(--gold));color:#000;border-radius:999px;padding:12px 18px;font-weight:950;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;box-shadow:0 12px 38px rgba(255,255,255,.16)}.btn:hover,button:hover{transform:translateY(-1px);box-shadow:0 14px 42px rgba(255,255,255,.10)}.btn.dark{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32);box-shadow:none}.secondary{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32)}.buttonRow{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:6px}.danger{background:#220f0f;color:#ffb4ad;border-color:#5b2521}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}.stat{border:1px solid rgba(255,255,255,.14);border-radius:18px;background:rgba(10,10,10,.82);padding:18px}.num{font-size:38px;font-weight:900;letter-spacing:-.05em}select{background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:10px;font:inherit}.inlineForm{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}input,textarea{width:100%;background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:12px;margin:8px 0 14px;font:inherit}textarea{min-height:260px}.check{display:flex;gap:10px;align-items:center}.check input{width:auto}.block{display:block;white-space:pre-wrap;word-break:break-all;padding:12px;margin:10px 0;background:#080809;border:1px solid #343438;border-radius:14px}.row{border:1px solid #27272a;border-radius:14px;padding:12px;margin:8px 0;background:#0b0b0c}.featureGrid,.stepsDash{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:16px}.featureGrid div,.stepsDash div{border:1px solid #27272a;border-radius:16px;background:#0b0b0c;padding:16px}.stepsDash span{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#fff;color:#000;font-weight:900}.anime{height:220px;border-radius:24px;border:1px solid #27272a;margin-top:22px;background:radial-gradient(circle at 30% 50%,rgba(255,255,255,.18),transparent 18%),radial-gradient(circle at 70% 50%,rgba(255,255,255,.11),transparent 20%),linear-gradient(120deg,#000,#111,#000);background-size:160% 160%;animation:movebg 6s infinite alternate;position:relative;overflow:hidden}.anime:after{content:'';position:absolute;inset:-40%;background:conic-gradient(from 0deg,transparent,rgba(255,255,255,.12),transparent 35%);animation:spin 8s linear infinite}@keyframes movebg{to{background-position:100% 60%}}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:1100px){.page{padding:12px}.shell{grid-template-columns:1fr;border-radius:22px}.side,.scriptsPane{border-right:0;border-bottom:1px solid var(--line)}.stats,.featureGrid,.stepsDash{grid-template-columns:1fr}.top{align-items:flex-start;gap:16px;flex-direction:column}}</style></head><body><div class="page"><div class="shell"><aside class="side"><div class="brand"><img src="https://files.catbox.moe/vda6a2.png"><div><b>Karma Protection</b><small>${username}</small></div></div><nav class="nav"><a class="${tab==='overview'?'active':''}" href="/dashboard">Overview</a><a class="${tab==='scripts'?'active':''}" href="/dashboard?tab=scripts">Scripts</a><a class="${tab==='obfuscate'?'active':''}" href="/dashboard?tab=obfuscate">Obfuscate</a>${isOwner?`<a class="${tab==='owner'?'active':''}" href="/dashboard?tab=owner">Owner Panel</a>`:''}<a href="/logout">Logout</a></nav></aside><aside class="scriptsPane"><h3>Scripts</h3>${scriptLinks}<a class="btn" href="/dashboard?tab=scripts">New Script</a></aside><main class="main"><div class="top"><div class="profile"><img class="avatar" src="${avatar}"><div><b>${username}</b><br><small>${myScriptCount}/${scriptQuota} scripts used</small></div></div><div class="buttonRow"><a class="btn dark" href="/dashboard?tab=obfuscate">Obfuscator</a><a class="btn dark" href="/">Home</a></div></div>${content}</main></div></div><script>document.getElementById('fileInput')?.addEventListener('change', async e => { const f=e.target.files[0]; if(!f) return; document.querySelector('input[name="name"]').value ||= f.name.replace(/\.(lua|txt)$/i,''); document.getElementById('codeBox').value = await f.text(); });</script></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma Dashboard</title><style>:root{--bg:#000000;--shell:rgba(11,11,12,0.9);--panel:rgba(16,16,17,0.8);--panel2:rgba(21,21,22,0.8);--line:rgba(212,175,55,0.25);--muted:#a1a1aa;--text:#f8fafc;--gold:#d4af37;--gold2:#f1d592}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:linear-gradient(rgba(0,0,0,0.75),rgba(0,0,0,0.75)),url("/assets/bg.png") center/cover fixed no-repeat,#000000;color:var(--text);font-family:"SF Pro Display","Aptos","Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.01em}body:before{content:'';position:fixed;right:-140px;bottom:-140px;width:560px;height:560px;background:url('/assets/karma-logo.png') center/contain no-repeat;opacity:.045;filter:grayscale(1);pointer-events:none}a{color:inherit;text-decoration:none}.page{padding:28px}.shell{max-width:1500px;margin:0 auto;min-height:calc(100vh - 56px);display:grid;grid-template-columns:280px 270px 1fr;border:1px solid rgba(212,175,55,0.4);border-radius:34px;overflow:hidden;background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.015));box-shadow:0 34px 140px rgba(0,0,0,.58),0 0 0 1px rgba(255,255,255,.025)}.side{background:linear-gradient(180deg,rgba(12,12,12,.96),rgba(5,5,5,.96));border-right:1px solid rgba(255,255,255,.20);padding:22px;overflow:auto;box-shadow:18px 0 80px rgba(0,0,0,.28)}.brand{display:flex;gap:12px;align-items:center;border-bottom:1px solid #242427;padding-bottom:20px}.brand img,.avatar{width:48px;height:48px;border-radius:16px;object-fit:cover;border:1px solid rgba(212,175,55,0.6);box-shadow:0 0 35px rgba(212,175,55,0.3)}.brand b{display:block;font-size:18px;font-weight:850}.brand small,.muted,small{color:var(--muted)}.nav{margin-top:20px}.nav a{display:flex;align-items:center;padding:12px 13px;border-radius:14px;color:#d4d4d8;font-weight:720;margin-bottom:4px}.nav a:hover,.nav a.active{background:linear-gradient(90deg,rgba(255,255,255,.18),rgba(255,255,255,.035));color:#fff;box-shadow:inset 3px 0 0 var(--gold)}.scriptsPane{background:rgba(7,7,7,.78);border-right:1px solid rgba(255,255,255,.16);padding:20px;overflow:auto}.scriptLink{display:block;border:1px solid rgba(255,255,255,.14);background:rgba(14,14,14,.86);border-radius:16px;padding:13px;margin-bottom:10px}.scriptLink.active{border-color:var(--gold);background:linear-gradient(180deg,rgba(255,255,255,.14),rgba(18,18,18,.88));box-shadow:0 10px 34px rgba(255,255,255,.08)}.main{padding:28px;min-width:0;position:relative;overflow:hidden}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.profile{display:flex;gap:12px;align-items:center}.card{border:1px solid rgba(255,255,255,.16);border-radius:28px;background:linear-gradient(180deg,rgba(24,24,24,.92),rgba(8,8,8,.97));padding:28px;box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 26px 90px rgba(0,0,0,.32);margin-bottom:18px;position:relative;z-index:1}.card h2{font-size:clamp(32px,4vw,56px);line-height:.95;letter-spacing:-.06em;margin:6px 0 12px}.eyebrow{color:#a1a1aa;text-transform:uppercase;letter-spacing:.18em;font-size:12px;font-weight:850;margin:0 0 8px}.btn,button{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--gold2);background:linear-gradient(180deg,var(--gold2),var(--gold));color:#000;border-radius:999px;padding:12px 18px;font-weight:950;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;box-shadow:0 12px 38px rgba(255,255,255,.16)}.btn:hover,button:hover{transform:translateY(-1px);box-shadow:0 14px 42px rgba(255,255,255,.10)}.btn.dark{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32);box-shadow:none}.secondary{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32)}.buttonRow{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:6px}.danger{background:#220f0f;color:#ffb4ad;border-color:#5b2521}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}.stat{border:1px solid rgba(255,255,255,.14);border-radius:18px;background:rgba(10,10,10,.82);padding:18px}.num{font-size:38px;font-weight:900;letter-spacing:-.05em}select{background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:10px;font:inherit}.inlineForm{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}input,textarea{width:100%;background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:12px;margin:8px 0 14px;font:inherit}textarea{min-height:260px}.check{display:flex;gap:10px;align-items:center}.check input{width:auto}.block{display:block;white-space:pre-wrap;word-break:break-all;padding:12px;margin:10px 0;background:#080809;border:1px solid #343438;border-radius:14px}.row{border:1px solid #27272a;border-radius:14px;padding:12px;margin:8px 0;background:#0b0b0c}.featureGrid,.stepsDash{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:16px}.featureGrid div,.stepsDash div{border:1px solid #27272a;border-radius:16px;background:#0b0b0c;padding:16px}.stepsDash span{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#fff;color:#000;font-weight:900}.anime{height:220px;border-radius:24px;border:1px solid #27272a;margin-top:22px;background:radial-gradient(circle at 30% 50%,rgba(255,255,255,.18),transparent 18%),radial-gradient(circle at 70% 50%,rgba(255,255,255,.11),transparent 20%),linear-gradient(120deg,#000,#111,#000);background-size:160% 160%;animation:movebg 6s infinite alternate;position:relative;overflow:hidden}.anime:after{content:'';position:absolute;inset:-40%;background:conic-gradient(from 0deg,transparent,rgba(255,255,255,.12),transparent 35%);animation:spin 8s linear infinite}@keyframes movebg{to{background-position:100% 60%}}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:1100px){.page{padding:12px}.shell{grid-template-columns:1fr;border-radius:22px}.side,.scriptsPane{border-right:0;border-bottom:1px solid var(--line)}.stats,.featureGrid,.stepsDash{grid-template-columns:1fr}.top{align-items:flex-start;gap:16px;flex-direction:column}}</style></head><body><div class="page"><div class="shell"><aside class="side"><div class="brand"><img src="/assets/karma-logo.png"><div><b>Karma Protection</b><small>${username}</small></div></div><nav class="nav"><a class="${tab==='overview'?'active':''}" href="/dashboard">Overview</a><a class="${tab==='scripts'?'active':''}" href="/dashboard?tab=scripts">Scripts</a><a class="${tab==='obfuscate'?'active':''}" href="/dashboard?tab=obfuscate">Obfuscate</a>${isOwner?`<a class="${tab==='owner'?'active':''}" href="/dashboard?tab=owner">Owner Panel</a>`:''}<a href="/logout">Logout</a></nav></aside><aside class="scriptsPane"><h3>Scripts</h3>${scriptLinks}<a class="btn" href="/dashboard?tab=scripts">New Script</a></aside><main class="main"><div class="top"><div class="profile"><img class="avatar" src="${avatar}"><div><b>${username}</b><br><small>${myScriptCount}/${scriptQuota} scripts used</small></div></div><div class="buttonRow"><a class="btn dark" href="/dashboard?tab=obfuscate">Obfuscator</a><a class="btn dark" href="/">Home</a></div></div>${content}</main></div></div><script>document.getElementById('fileInput')?.addEventListener('change', async e => { const f=e.target.files[0]; if(!f) return; document.querySelector('input[name="name"]').value ||= f.name.replace(/\.(lua|txt)$/i,''); document.getElementById('codeBox').value = await f.text(); });</script></body></html>`;
 }
 
 function makeSession(user) {
@@ -1542,6 +1602,7 @@ function requireDashboardUser(req, res) {
   return user;
 }
 
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll('&', '&amp;')
@@ -1550,6 +1611,7 @@ function escapeHtml(value) {
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
 }
+
 
 // ---------------- Express API ----------------
 function startApiServer() {
@@ -1560,12 +1622,6 @@ function startApiServer() {
 
   app.get('/', (req, res) => res.type('html').send(kolsecHomePage()));
   app.get('/health', (req, res) => res.json({ ok: true, name: 'Karma Protection' }));
-
-  app.get('/api', (req, res) => {
-    const user = getSessionUser(req);
-    const apiKey = user ? makeUserApiKey(user.id) : null;
-    return res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma API</title><style>body{margin:0;background:#0a0a0a;color:#f0f0f0;font-family:system-ui,sans-serif}.wrap{max-width:1000px;margin:0 auto;padding:32px}.card{background:#111;border:1px solid #333;border-radius:16px;padding:22px;margin:18px 0}code,pre{background:#050505;border:1px solid #262626;border-radius:8px;padding:10px;display:block;overflow:auto}.gold{color:#d4af37}a{color:#d4af37}</style></head><body><div class="wrap"><h1 class="gold">Karma API</h1><p>Obfuscator and licensing API.</p>${apiKey ? `<div class="card"><b>Your API Key</b><code>${apiKey}</code></div>` : `<p><a href="/login">Login to get your API key</a></p>`}<div class="card"><h2>POST /api/obfuscate</h2><pre>{"code":"print('hi')","level":"standard"}</pre></div><div class="card"><h2>POST /api/verify</h2><pre>{"script_id":"script_x","key":"PS-...","hwid":"device","timestamp":${Date.now()}}</pre><p>Header: <code>X-API-Secret: your_script_secret</code></p></div><div class="card"><h2>GET /api/stats</h2><pre>{"scripts":0,"keys":0}</pre></div><p><a href="/">Back home</a></p></div></body></html>`);
-  });
 
   app.get('/api/stats', (req, res) => {
     const scriptCount = db.prepare('SELECT COUNT(*) AS count FROM hosted_scripts').get().count;
@@ -1690,7 +1746,6 @@ function startApiServer() {
     const code = String(req.body.code || '').slice(0, 4000);
     const shouldObfuscate = req.body.obfuscate === 'true' || req.body.obfuscate === 'on';
     const level = String(req.body.level || 'standard');
-    const keySystemId = String(req.body.key_system_id || '').trim() || null;
     if (!name || !code) return res.status(400).type('html').send('<h1>Missing name or code</h1><a href="/dashboard">Back</a>');
 
     let finalCode = code;
@@ -1701,7 +1756,6 @@ function startApiServer() {
       name,
       code: String(finalCode),
       sourceCode: code,
-      keySystemId,
       obfuscated: shouldObfuscate,
       createdBy: user.id
     });
@@ -1735,12 +1789,11 @@ function startApiServer() {
     const source = String(req.body.code || '').slice(0, 4000);
     const level = String(req.body.level || 'standard');
     const shouldObfuscate = req.body.obfuscate === 'true' || req.body.obfuscate === 'on';
-    const keySystemId = String(req.body.key_system_id || '').trim() || null;
     if (!name || !source) return res.status(400).type('html').send('<h1>Missing name or code</h1><a href="/dashboard?tab=scripts">Back</a>');
 
     const finalCode = shouldObfuscate ? await callObfuscator(source, level) : source;
-    db.prepare('UPDATE hosted_scripts SET name = ?, code = ?, source_code = ?, key_system_id = ?, obfuscated = ? WHERE id = ?')
-      .run(name, finalCode, source, keySystemId, shouldObfuscate ? 1 : 0, req.params.id);
+    db.prepare('UPDATE hosted_scripts SET name = ?, code = ?, source_code = ?, obfuscated = ? WHERE id = ?')
+      .run(name, finalCode, source, shouldObfuscate ? 1 : 0, req.params.id);
     return res.redirect(`/dashboard?tab=scripts&script=${encodeURIComponent(req.params.id)}`);
   });
 
@@ -1772,7 +1825,7 @@ function startApiServer() {
     const level = String(req.body.level || 'standard');
     if (!code) return res.status(400).type('html').send('<h1>Missing code</h1><a href="/dashboard?tab=obfuscate">Back</a>');
     const obfuscated = await callObfuscator(code, level);
-    return res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Obfuscated - Karma Protection</title><style>body{margin:0;background:#000;color:#fff;font-family:SF Pro Display,Aptos,Segoe UI,system-ui,sans-serif}.wrap{width:min(1100px,94%);margin:32px auto}.card{border:1px solid #2a2a2d;border-radius:28px;background:linear-gradient(180deg,#181818,#080808);padding:24px}textarea{width:100%;min-height:62vh;background:#050505;color:#fff;border:1px solid #333;border-radius:16px;padding:14px;font:12px ui-monospace,monospace}button,a{display:inline-flex;margin:10px 8px 18px 0;padding:12px 16px;border-radius:999px;border:1px solid #d4af37;background:#d4af37;color:#000;text-decoration:none;font-weight:900;cursor:pointer}.dark{background:#000;color:#fff;border-color:#333}</style></head><body><div class="wrap"><div class="card"><h1>Obfuscated Successfully</h1><p>Level: <b>${escapeHtml(level)}</b>. Copy it below — no download needed.</p><button onclick="navigator.clipboard.writeText(document.getElementById('out').value)">Copy Obfuscated Code</button><a class="dark" href="/dashboard?tab=obfuscate">Back to Obfuscator</a><a class="dark" href="/dashboard?tab=scripts">Scripts</a><textarea id="out" spellcheck="false">${escapeHtml(obfuscated)}</textarea></div></div></body></html>`);
+    return res.type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Obfuscated - Karma Protection</title><style>body{margin:0;background:#000;color:#fff;font-family:SF Pro Display,Aptos,Segoe UI,system-ui,sans-serif}.wrap{width:min(1100px,94%);margin:32px auto}.card{border:1px solid #2a2a2d;border-radius:28px;background:linear-gradient(180deg,#181818,#080808);padding:24px}textarea{width:100%;min-height:62vh;background:#050505;color:#fff;border:1px solid #333;border-radius:16px;padding:14px;font:12px ui-monospace,monospace}button,a{display:inline-flex;margin:10px 8px 18px 0;padding:12px 16px;border-radius:999px;border:1px solid #fff;background:#fff;color:#000;text-decoration:none;font-weight:900;cursor:pointer}.dark{background:#000;color:#fff;border-color:#333}</style></head><body><div class="wrap"><div class="card"><h1>Obfuscated Successfully</h1><p>Level: <b>${escapeHtml(level)}</b>. Copy it below — no download needed.</p><button onclick="navigator.clipboard.writeText(document.getElementById('out').value)">Copy Obfuscated Code</button><a class="dark" href="/dashboard?tab=obfuscate">Back to Obfuscator</a><a class="dark" href="/dashboard?tab=scripts">Scripts</a><textarea id="out" spellcheck="false">${escapeHtml(obfuscated)}</textarea></div></div></body></html>`);
   });
 
   app.post('/redeem', (req, res) => {
@@ -1863,15 +1916,9 @@ function startApiServer() {
   app.get('/loadstring/:id', (req, res) => {
     const script = db.prepare('SELECT * FROM hosted_scripts WHERE id = ?').get(req.params.id);
     if (!script) return res.status(404).type('text/plain').send('-- Karma Protection: script not found');
+    const rawUrl = `${publicBaseUrl()}/script/${script.id}.lua`;
     res.setHeader('Cache-Control', 'no-store');
-    return res.type('text/plain').send(makeLoaderSnippet(script.id));
-  });
-
-  app.get('/api/v1/luascripts/public/:id/download', (req, res) => {
-    const script = db.prepare('SELECT * FROM hosted_scripts WHERE id = ?').get(req.params.id);
-    if (!script) return res.status(404).type('text/plain').send('-- Karma Protection: script not found');
-    res.setHeader('Cache-Control', 'no-store');
-    return res.type('text/plain').send(script.code);
+    return res.type('text/plain').send(makeProtectedLoader(rawUrl, script.id));
   });
 
   app.get('/hosted', (req, res) => {
@@ -1879,13 +1926,16 @@ function startApiServer() {
     res.json({ ok: true, scripts: rows.map(r => ({ ...r, script_url: `${publicBaseUrl()}/script/${r.id}.lua`, loadstring_url: `${publicBaseUrl()}/loadstring/${r.id}` })) });
   });
 
+  
   app.post('/api/log-execution', (req, res) => {
     const { script_id, key, hwid, executor } = req.body || {};
-    const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || null;
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    
     if (script_id) {
       db.prepare('INSERT INTO execution_logs (script_id, license_key, hwid, ip, executor) VALUES (?, ?, ?, ?, ?)')
-        .run(String(script_id), key || null, hwid || null, ip, executor || null);
+        .run(script_id, key || null, hwid || null, ip || null, executor || null);
     }
+    
     return res.json({ ok: true });
   });
 
@@ -1942,6 +1992,7 @@ function startApiServer() {
     return res.status(500).type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma Protection Error</title><style>body{margin:0;background:#000;color:#fff;font-family:system-ui;display:grid;place-items:center;min-height:100vh}.card{width:min(680px,92%);border:1px solid #333;border-radius:24px;background:#090909;padding:28px}a{color:#fff}</style></head><body><div class="card"><h1>Something went wrong</h1><p>The website hit an error instead of loading this page.</p><p>Try signing in again, or check Render logs for the exact error.</p><a href="/">Back home</a></div></body></html>`);
   });
 
+  // Render requires process.env.PORT for web services.
   const port = Number(process.env.PORT || process.env.API_PORT || 3000);
   app.listen(port, '0.0.0.0', () => console.log(`Web server listening on port ${port}`));
 }
@@ -1955,5 +2006,5 @@ function startApiServer() {
 
   try { await hydrateHostedScriptsFromSupabase(); } catch (error) { console.warn('Supabase hydrate failed:', error.message); }
   startApiServer();
-  await client.login(KARMA_DISCORD_TOKEN);
+  await client.login(DISCORD_TOKEN);
 })();
