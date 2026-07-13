@@ -1,8 +1,5 @@
 // server.js
-// Karma Protection v6.3 - LuauProtect Style UI
-// Full Website + Discord Bot Integration
-
-require('dotenv').config();
+// Karma Protection v6.3 - No dotenv, pure environment variables
 
 const express = require('express');
 const Database = require('better-sqlite3');
@@ -24,26 +21,30 @@ const {
   TextInputStyle,
 } = require('discord.js');
 
-const {
-  DISCORD_TOKEN,
-  CLIENT_ID,
-  GUILD_ID,
-  DATABASE_PATH = './data.sqlite',
-  PUBLIC_BASE_URL = 'https://your-app.up.railway.app',
-  SESSION_SECRET,
-  DISCORD_INVITE_URL = 'https://discord.gg/your-invite',
-  OWNER_ID = 'YOUR_DISCORD_ID_HERE',
-  BRAND_COLOR = 0xD4AF37,
-  PREFIX = '/'
-} = process.env;
+// ============ ENVIRONMENT VARIABLES (no dotenv) ============
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID;
+const DATABASE_PATH = process.env.DATABASE_PATH || './data.sqlite';
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://your-app.up.railway.app';
+const SESSION_SECRET = process.env.SESSION_SECRET;
+const DISCORD_INVITE_URL = process.env.DISCORD_INVITE_URL || 'https://discord.gg/your-invite';
+const OWNER_ID = process.env.OWNER_ID || 'YOUR_DISCORD_ID_HERE';
+const BRAND_COLOR = parseInt(process.env.BRAND_COLOR) || 0xD4AF37;
+const PREFIX = process.env.PREFIX || '/';
 
 const SESSION_SIGNING_SECRET = SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 const COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 if (!DISCORD_TOKEN) {
   console.error('Missing DISCORD_TOKEN environment variable.');
+  console.error('Set it with: export DISCORD_TOKEN=your_token_here');
   process.exit(1);
 }
+
+console.log('✅ Karma Protection v6.3 starting...');
+console.log(`📁 Database: ${DATABASE_PATH}`);
+console.log(`🌐 Base URL: ${PUBLIC_BASE_URL}`);
 
 // ---------------- Database ----------------
 const db = new Database(DATABASE_PATH);
@@ -171,6 +172,23 @@ function getSessionUser(req) {
 function requireAuth(req, res, next) {
   if (req.session.user) return next();
   res.redirect('/');
+}
+
+function timeRemaining(ms) {
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  if (days > 0) return `${days}d ${hours % 24}h`;
+  if (hours > 0) return `${hours}h ${minutes % 60}m`;
+  if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+  return `${seconds}s`;
+}
+
+function formatExpiry(expiresAt) {
+  if (!expiresAt) return 'Permanent';
+  const d = new Date(expiresAt);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
 }
 
 // ---------------- Express App ----------------
@@ -434,7 +452,6 @@ app.get('/api/auth/discord/callback', async (req, res) => {
     });
     const user = await userResponse.json();
     
-    // Create or update user
     let dbUser = db.prepare('SELECT * FROM users WHERE discord_id = ?').get(user.id);
     if (!dbUser) {
       const id = `user_${crypto.randomBytes(8).toString('hex')}`;
@@ -1368,7 +1385,7 @@ const client = new Client({
 });
 
 client.once('ready', () => {
-  console.log(`Karma Bot online as ${client.user.tag}`);
+  console.log(`✅ Karma Bot online as ${client.user.tag}`);
 });
 
 // ---------------- Message Commands ----------------
@@ -1381,7 +1398,6 @@ client.on('messageCreate', async (msg) => {
   const args = parts;
 
   try {
-    // Helper functions
     const user = db.prepare('SELECT * FROM users WHERE discord_id = ?').get(msg.author.id);
     
     if (cmd === 'help') {
@@ -1803,10 +1819,13 @@ async function deployCommands() {
     return;
   }
 
-  const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
+  const rest = new (require('@discordjs/rest')).REST({ version: '10' }).setToken(DISCORD_TOKEN);
 
   if (GUILD_ID) {
-    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: [] });
+    await rest.put(
+      require('discord-api-types/v10').Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+      { body: [] }
+    );
     console.log('Cleared guild commands.');
   }
 }
@@ -1821,6 +1840,8 @@ async function deployCommands() {
   app.listen(port, '0.0.0.0', () => {
     console.log(`Karma Protection v6.3 running on port ${port}`);
     console.log(`Website: http://localhost:${port}`);
+    console.log(`Public URL: ${publicBaseUrl()}`);
+    console.log(`Discord Bot: ${client.user ? client.user.tag : 'starting...'}`);
   });
   
   await client.login(DISCORD_TOKEN);
