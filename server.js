@@ -88,7 +88,6 @@ const commands = [
       .addStringOption(o => o.setName('title').setDescription('Key system title').setRequired(false).setMaxLength(100))
       .addStringOption(o => o.setName('description').setDescription('Key system description').setRequired(false).setMaxLength(500))),
 
-
   new SlashCommandBuilder()
     .setName('apply')
     .setDescription('Create/apply a protected script and host its loadstring')
@@ -248,8 +247,6 @@ async function deployCommands() {
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
     console.log(`Deployed ${commands.length} commands to guild ${GUILD_ID}.`);
 
-    // Remove old global commands like /setup and /genkey so they stop showing.
-    // Set CLEAR_GLOBAL_COMMANDS=false if you intentionally use global commands.
     if (process.env.CLEAR_GLOBAL_COMMANDS !== 'false') {
       await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
       console.log('Cleared global commands.');
@@ -347,7 +344,6 @@ CREATE TABLE IF NOT EXISTS key_system_templates (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-
 CREATE TABLE IF NOT EXISTS execution_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   script_id TEXT NOT NULL,
@@ -397,7 +393,7 @@ CREATE INDEX IF NOT EXISTS idx_hosted_scripts_linked ON hosted_scripts(linked_sc
 CREATE INDEX IF NOT EXISTS idx_premium_codes_redeemed_by ON premium_codes(redeemed_by);
 `);
 
-// Migrations for older Render SQLite databases.
+// Migrations
 for (const migration of [
   'ALTER TABLE guild_settings ADD COLUMN panel_title TEXT',
   'ALTER TABLE guild_settings ADD COLUMN panel_description TEXT',
@@ -594,332 +590,39 @@ function publicBaseUrl() {
 }
 
 function makeLoaderSnippet(scriptId) {
-  return `loadstring(game:HttpGet("${publicBaseUrl()}/loadstring/${scriptId}"))("${scriptId}")`;
+  return `loadstring(game:HttpGet("https://luarmor-bot-1-0yt4.onrender.com/script/${scriptId}.lua"))()`;
 }
 
 function makeProtectedLoader(rawUrl, scriptId) {
-  const home = publicBaseUrl();
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+';
-  
-  return `--[[
-\tKarma Protection VM Loader v3
-\tSecure Instruction Stream
-]]
-return (function(_sid, ...)
-  local _G = getfenv(0) or _G
-  local _type, _pcall, _tostr, _byte, _error = type, pcall, tostring, string.byte, error
-  local _load = loadstring or load
-  local _warn = (typeof(warn) == "function") and warn or print
-  local _setclip = (typeof(setclipboard) == "function") and setclipboard or nil
-  
-  local _04wy = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+"
-  local _iqru = ${JSON.stringify(home)}
-  local _30lq = ${JSON.stringify(rawUrl)}
-  local _r0wo = { script_id = ${JSON.stringify(scriptId)} }
-  
-  local function _gat3(m)
-    if _setclip then _pcall(_setclip, _iqru) end
-    _pcall(_warn, "[Karma VM] " .. _tostr(m) .. " | " .. _iqru)
-    while true do _error(m, 0) end
-  end
-
-  local function _xm17(f, ...)
-    local ok, r = _pcall(f, ...)
-    return ok and r or nil
-  end
-
-  local function _r8wq(v)
-    local s, n = _tostr(v), 2166136261
-    for i = 1, #s do
-      n = bit32.bxor(n, _byte(s, i))
-      n = (n * 16777619) % 4294967296
-    end
-    return n
-  end
-
-  -- VM State
-  
-  local _gqej = 1
-  local _bmcv = getfenv(1)
-  
-  -- Instruction Stream (Encoded)
-  -- 1: PULSE, 2: CHECK_ENV, 3: CHECK_HOOKS, 4: CHECK_GAME, 5: FETCH, 6: EXECUTE
-  local _y4m2 = {1, 2, 3, 4, 5, 7, 8, 1, 3, 6}
-  
-  local _rrw1 = {
-    [1] = function() -- PULSE / TAMPER CHECK
-      local _raw = { _K = "Karma Protection" }
-      local _sig = { _K = 2947889846 }
-      for k, v in pairs(_sig) do
-        if _r8wq(_raw[k]) ~= v then _gat3("tamper detected") end
-      end
-    end,
-    [2] = function() -- CHECK_ENV
-      if typeof(getfenv) == "function" then
-        local e = _xm17(getfenv, 1)
-        if _type(e) == "table" then
-          local s = { "hookfunction", "newcclosure", "syn", "fluxus" }
-          for _, k in ipairs(s) do
-            if e[k] ~= nil and rawget(_G, k) == nil then _gat3("env logger: " .. k) end
-          end
-        end
-      end
-    end,
-    [3] = function() -- CHECK_HOOKS
-      local c = {tostring, type, pcall, pairs, _load}
-      for _, f in ipairs(c) do
-        if typeof(f) ~= "function" then _gat3("hook detected") end
-        if typeof(islclosure) == "function" and islclosure(f) then _gat3("hooked closure") end
-      end
-    end,
-    [4] = function() -- CHECK_GAME
-      local ok, info = _pcall(function() return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId) end)
-      if ok and _type(info) == "table" and _type(info.Name) ~= "string" then _gat3("game tamper") end
-    end,
-    [5] = function() -- FETCH
-      local function _g(u)
-        if game and game.HttpGet then
-          local r = _xm17(function() return game:HttpGet(u) end)
-          if _type(r) == "string" and #r > 0 then return r end
-        end
-        local req = (typeof(syn) == "table" and syn.request) or (typeof(http_request) == "function" and http_request) or (typeof(request) == "function" and request)
-        if _type(req) == "function" then
-          local res = _xm17(req, { Url = u, Method = "GET" })
-          if _type(res) == "table" then return res.Body or res.body end
-        end
-        return nil
-      end
-      _r0wo.src = _g(_30lq)
-      if _type(_r0wo.src) ~= "string" then _gat3("fetch failed") end
-    end,
-    
-    [7] = function() -- LOGGING
-      local function _l(u, d)
-        local req = (typeof(syn) == "table" and syn.request) or (typeof(http_request) == "function" and http_request) or (typeof(request) == "function" and request)
-        if _type(req) == "function" then
-          _pcall(req, {
-            Url = u,
-            Method = "POST",
-            Headers = { ["Content-Type"] = "application/json" },
-            Body = game:GetService("HttpService"):JSONEncode(d)
-          })
-        end
-      end
-      local d = {
-        script_id = _r0wo.script_id or "unknown",
-        key = _G.KarmaKey or "none",
-        hwid = (typeof(gethwid) == "function" and gethwid()) or "none",
-        executor = (typeof(identifyexecutor) == "function" and identifyexecutor()) or "unknown"
-      }
-      _l(_iqru .. "/api/log-execution", d)
-    end,
-
-    
-    [8] = function() -- SOURCE ANTI-TAMPER
-      local function _sc(s)
-        local c = 0
-        if s then
-          for i = 1, #s do
-            c = (c + _byte(s, i) * i) % 4294967295
-          end
-        end
-        return c
-      end
-      local src1 = debug.getinfo(1).source
-      local sum1 = _sc(src1)
-      -- Use a simple loop for wait if task.wait isn't available
-      if typeof(task) == "table" and task.wait then task.wait(0.1) end
-      local src2 = debug.getinfo(1).source
-      local sum2 = _sc(src2)
-      if sum1 ~= sum2 or sum1 == 0 then
-        _gat3("source tampering detected")
-      end
-    end,
-
-    [6] = function(...) -- EXECUTE
-      if _type(_load) ~= "function" then _gat3("no load") end
-      local ok, f = _pcall(_load, _r0wo.src, "KarmaVM")
-      if not ok or _type(f) ~= "function" then _gat3("load failed") end
-      return f(...)
-    end
-  }
-
-  -- Interpreter Loop
-  local _614k
-  while _gqej <= #_y4m2 do
-    local _szk7 = _y4m2[_gqej]
-    local _ci83 = _rrw1[_szk7]
-    if _szk7 == 6 then
-      return _ci83(...)
-    else
-      _ci83()
-    end
-    _gqej = _gqej + 1
-  end
-end)(...)
-`;
+  return `loadstring(game:HttpGet("https://luarmor-bot-1-0yt4.onrender.com/script/${scriptId}.lua"))()`;
 }
-
-const ANTI_TAMPER_LUA = `-- by socolata
-local integrityState = true
-local secureKey = "REALTIME_VALIDATION"
-local function verifyCore()
-local ok1, a1 = pcall(debug.info, task.spawn, "a")
-local ok2, a2 = pcall(debug.info, print, "a")
-if not ok1 or not ok2 or a1 ~= 0 or a2 ~= 0 then return false end
-if getfenv(task.spawn) ~= getfenv(0) or getfenv(print) ~= getfenv(0) then return false end
-return true
-end
-local function performStaticChecks()
-if not verifyCore() then return false end
-local isStackValid = true
-local _, stackErr = pcall(function()
-local function checkStack(depth)
-if depth > 0 then checkStack(depth - 1) else error("stack_marker") end
-end
-checkStack(3)
-end)
-if not stackErr or not string.find(stackErr, "stack_marker") then isStackValid = false end
-if not isStackValid then return false end
-local isNativeBehavior = true
-local sampleTable = {x = 10, y = 20}
-if #sampleTable ~= 0 or table.find(sampleTable, 10) ~= nil then isNativeBehavior = false end
-if not isNativeBehavior then return false end
-local isStringSecure = true
-local _, strCheck = pcall(string.sub, "luau_secure", 1, 4)
-if strCheck ~= "luau" then isStringSecure = false end
-if not isStringSecure then return false end
-local isTypeSecure = true
-if type(pcall) ~= "function" or type(print) ~= "function" then isTypeSecure = false end
-if not isTypeSecure then return false end
-local isMathSecure = true
-if math.sqrt(16) ~= 4 or math.ceil(4.2) ~= 5 then isMathSecure = false end
-if not isMathSecure then return false end
-local stringIntegrity = true
-if string.lower("ABC") ~= "abc" or string.upper("abc") ~= "ABC" or string.len("123") ~= 3 then stringIntegrity = false end
-if not stringIntegrity then return false end
-local tableFunctions = true
-if type(table.insert) ~= "function" or type(table.remove) ~= "function" or type(table.concat) ~= "function" then tableFunctions = false end
-if not tableFunctions then return false end
-local luauPackCheck = true
-if type(table.pack) ~= "function" or type(table.unpack) ~= "function" then luauPackCheck = false end
-if not luauPackCheck then return false end
-local stringFormatCheck = true
-if string.format("%d", 100) ~= "100" or string.format("%s", "test") ~= "test" then stringFormatCheck = false end
-if not stringFormatCheck then return false end
-local bitwiseCheck = true
-if bit32.band(5, 3) ~= 1 or bit32.bor(4, 2) ~= 6 or bit32.bxor(5, 3) ~= 6 then bitwiseCheck = false end
-if not bitwiseCheck then return false end
-local tableClearCheck = true
-local clearTable = {1, 2, 3}
-table.clear(clearTable)
-if next(clearTable) ~= nil then tableClearCheck = false end
-if not tableClearCheck then return false end
-return true
-end
-local function runRealTimeMonitor()
-while integrityState do
-if not verifyCore() then integrityState = false end
-local envCheck = pcall(function()
-local testEnv = getfenv(0)
-if testEnv ~= getfenv(1) then integrityState = false end
-end)
-if not envCheck then integrityState = false end
-local tableIntegrity = pcall(function()
-local t = {A = 1}
-if next(t) ~= "A" or #t ~= 0 then integrityState = false end
-end)
-if not tableIntegrity then integrityState = false end
-local clockCheck = pcall(function()
-local t1 = os.clock()
-local t2 = os.clock()
-if t2 < t1 then integrityState = false end
-end)
-if not clockCheck then integrityState = false end
-local typeVerification = pcall(function()
-if type(integrityState) ~= "boolean" or type(secureKey) ~= "string" then integrityState = false end
-end)
-if not typeVerification then integrityState = false end
-local pcallBehavior = pcall(function()
-local s, e = pcall(function() error("loop_test") end)
-if s or not e or not string.find(e, "loop_test") then integrityState = false end
-end)
-if not pcallBehavior then integrityState = false end
-local mathLoopCheck = pcall(function()
-if math.abs(-5) ~= 5 or math.max(1, 10) ~= 10 or math.min(1, 10) ~= 1 then integrityState = false end
-end)
-if not mathLoopCheck then integrityState = false end
-local stringMatchCheck = pcall(function()
-if string.match("hello", "ell") ~= "ell" or string.gsub("apple", "p", "b") ~= "abble" then integrityState = false end
-end)
-if not stringMatchCheck then integrityState = false end
-local pairsBehavior = pcall(function()
-local count = 0
-for k, v in pairs({1, 2, 3}) do count = count + 1 end
-if count ~= 3 then integrityState = false end
-end)
-if not pairsBehavior then integrityState = false end
-local coroutineBehavior = pcall(function()
-local co = coroutine.create(function() coroutine.yield("running") end)
-local _, res = coroutine.resume(co)
-if res ~= "running" or coroutine.status(co) ~= "suspended" then integrityState = false end
-end)
-if not coroutineBehavior then integrityState = false end
-local xpcallBehavior = pcall(function()
-local handled = false
-xpcall(function() error("xpcall_test") end, function(err) if string.find(err, "xpcall_test") then handled = true end end)
-if not handled then integrityState = false end
-end)
-if not xpcallBehavior then integrityState = false end
-local stringByteCheck = pcall(function()
-if string.byte("A") ~= 65 or string.char(66) ~= "B" then integrityState = false end
-end)
-if not stringByteCheck then integrityState = false end
-if not integrityState then
-while true do
-pcall(function() return coroutine.yield() end)
-end
-end
-task.wait(0.1)
-end
-end
-local isExecutionSafe, verificationResult = pcall(performStaticChecks)
-if not isExecutionSafe or verificationResult ~= true then
-integrityState = false
-while true do
-pcall(function() return coroutine.yield() end)
-end
-else
-task.spawn(runRealTimeMonitor)
-end
-`;
 
 async function callObfuscator(luaCode, level = 'standard') {
-  // Calls the Karma Obfuscator API to obfuscate the given Lua code.
   const selected = String(level || 'standard').toLowerCase();
   const apiUrl = (OBFUSCATOR_API_URL || 'https://luarmor-bot-1-0yt4.onrender.com').replace(/\/$/, '') + '/api/obfuscate';
-  const codeWithAntiTamper = ANTI_TAMPER_LUA + '\n' + String(luaCode || '');
 
-  const res = await fetch(apiUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code: codeWithAntiTamper, level: selected })
-  });
+  try {
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: String(luaCode || ''), level: selected })
+    });
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.status.toString());
-    throw new Error(`Karma Obfuscator API error (${res.status}): ${text.slice(0, 200)}`);
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(`Obfuscator API error (${res.status}): ${data.error || 'Unknown error'}`);
+    }
+
+    if (!data.ok || typeof data.obfuscated !== 'string') {
+      throw new Error(`Obfuscator returned an error: ${data.error || 'Invalid response'}`);
+    }
+
+    return data.obfuscated;
+  } catch (error) {
+    throw new Error(`Obfuscator failed: ${error.message}`);
   }
-
-  const data = await res.json();
-  if (!data.ok || typeof data.obfuscated !== 'string') {
-    throw new Error(`Karma Obfuscator API returned an error: ${data.error || JSON.stringify(data).slice(0, 200)}`);
-  }
-
-  return data.obfuscated;
 }
-
-
 
 function verifyAdmin(member, settings) {
   if (!member) return false;
@@ -955,7 +658,6 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-// Prevent duplicate replies if Discord/hosting sends the same interaction twice.
 const processedInteractions = new Set();
 
 function panelEmbed(guildId, sentBy = null) {
@@ -967,8 +669,8 @@ function panelEmbed(guildId, sentBy = null) {
     .setTitle(title)
     .setDescription(description)
     .setColor(0xe3b944)
-    .setThumbnail(`${publicBaseUrl()}/assets/karma-logo.png`)
-    .setFooter({ text: sentBy ? `Sent By ${sentBy} • Karma Protection` : 'Karma Protection', iconURL: `${publicBaseUrl()}/assets/karma-logo.png` });
+    .setThumbnail(`https://files.catbox.moe/vda6a2.png`)
+    .setFooter({ text: sentBy ? `Sent By ${sentBy} • Karma Protection` : 'Karma Protection', iconURL: `https://files.catbox.moe/vda6a2.png` });
 }
 
 function panelButtons() {
@@ -996,18 +698,15 @@ function keySystemEmbed(guildId) {
     .setTitle(settings?.key_system_title || 'Karma Key System')
     .setDescription(settings?.key_system_description || 'Enter your license key to unlock access')
     .setColor(color)
-    .setThumbnail(`${publicBaseUrl()}/assets/karma-logo.png`)
+    .setThumbnail(`https://files.catbox.moe/vda6a2.png`)
     .addFields(
       { name: 'How to Redeem', value: 'Click Redeem Key on the main panel and enter your license key.' },
       { name: 'HWID Locking', value: 'Your key locks to your first device. Reset HWID has a cooldown.' }
     )
-    .setFooter({ text: 'Karma Protection Key System', iconURL: `${publicBaseUrl()}/assets/karma-logo.png` });
+    .setFooter({ text: 'Karma Protection Key System', iconURL: `https://files.catbox.moe/vda6a2.png` });
 }
 
-
 async function logGuild(guild, text) {
-  // Disabled by default so commands do not appear to send two messages.
-  // If you want separate log messages later, set ENABLE_COMMAND_LOGS=true in Render.
   if (process.env.ENABLE_COMMAND_LOGS !== 'true') return;
   const settings = getSettings(guild.id);
   if (!settings || !settings.log_channel_id) return;
@@ -1144,7 +843,6 @@ async function handleCommand(interaction) {
     };
     upsertSettings(interaction.guildId, patch);
 
-    // Only ONE Discord response: the panel itself. No channel.send + confirmation.
     const panelMessage = await interaction.reply({
       embeds: [panelEmbed(interaction.guildId, interaction.user.username)],
       components: panelButtons(),
@@ -1466,7 +1164,7 @@ async function handleCommand(interaction) {
     const script = db.prepare('SELECT * FROM scripts WHERE id = ? AND guild_id = ?').get(scriptId, interaction.guildId);
     if (!script) return interaction.reply({ ephemeral: true, content: 'Invalid script ID.' });
     const apiPort = process.env.PORT || process.env.API_PORT || 3000;
-    const example = `-- Generic Lua example. Change request/http_request for your environment.\nlocal key = "PASTE_USER_KEY"\nlocal hwid = "PUT_HWID_HERE"\nlocal apiUrl = "https://YOUR-RENDER-URL.onrender.com/api/verify"\n\nlocal body = '{"script_id":"${scriptId}","key":"' .. key .. '","hwid":"' .. hwid .. '"}'\n\nlocal res = request({\n  Url = apiUrl,\n  Method = "POST",\n  Headers = {\n    ["Content-Type"] = "application/json",\n    ["X-API-Secret"] = "PASTE_SCRIPT_API_SECRET"\n  },\n  Body = body\n})\n\nprint(res.Body)`;
+    const example = `-- Generic Lua example. Change request/http_request for your environment.\nlocal key = "PASTE_USER_KEY"\nlocal hwid = "PUT_HWID_HERE"\nlocal apiUrl = "https://YOUR-RENDER-URL.onrender.com/api/verify"\n\nlocal body = '{"script_id":"${scriptId}","key":"' .. key .. '","hwid":"' .. hwid .. '"}"'\n\nlocal res = request({\n  Url = apiUrl,\n  Method = "POST",\n  Headers = {\n    ["Content-Type"] = "application/json",\n    ["X-API-Secret"] = "PASTE_SCRIPT_API_SECRET"\n  },\n  Body = body\n})\n\nprint(res.Body)`;
     return interaction.reply({ ephemeral: true, content: `\`\`\`lua\n${example}\n\`\`\`` });
   }
 }
@@ -1480,7 +1178,6 @@ async function sendMyKeys(interaction, userId) {
   if (interaction.deferred || interaction.replied) await interaction.followUp({ ephemeral: true, content });
   else await interaction.reply({ ephemeral: true, content });
 }
-
 
 async function sendHostedScripts(interaction) {
   const settings = getSettings(interaction.guildId);
@@ -1598,29 +1295,509 @@ function kolsecHomePage() {
   const hostedCount = db.prepare('SELECT COUNT(*) AS count FROM hosted_scripts').get().count;
 
   return `<!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Karma Protection — Lua Code Protection & Licensing</title>
-  <meta name="description" content="Karma Protection protects Lua code with obfuscation, HWID-locked keys, hosted loadstrings, and a Discord synced panel." />
-  <style>
-    :root{--bg:#030303;--card:rgba(15,15,16,0.85);--muted:#a1a1aa;--line:rgba(212,175,55,0.2);--text:#f8fafc;--primary:#d4af37;--soft:#151518;--gold:#d4af37}
-    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:linear-gradient(rgba(0,0,0,0.7),rgba(0,0,0,0.7)),url("/assets/bg.png") center/cover fixed no-repeat,#030303;color:var(--text);font-family:"SF Pro Display","Aptos","Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.01em}body:before{content:'';position:fixed;right:-170px;bottom:-170px;width:620px;height:620px;background:url('/assets/karma-logo.png') center/contain no-repeat;opacity:.045;pointer-events:none}.grid{position:fixed;inset:0;background-image:linear-gradient(rgba(255,255,255,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.055) 1px,transparent 1px);background-size:64px 64px;mask-image:linear-gradient(to bottom,#000,transparent 82%);pointer-events:none}a{color:inherit;text-decoration:none}.container{width:min(1180px,92%);margin:auto}header{position:sticky;top:0;z-index:40;border-bottom:1px solid rgba(255,255,255,.12);background:rgba(3,3,3,.82);backdrop-filter:blur(18px)}.nav{height:64px;display:flex;align-items:center;justify-content:space-between}.brand{position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;font-weight:780}.brand img{width:34px;height:34px;border-radius:10px;object-fit:cover;border:1px solid rgba(212,175,55,0.5)}.beta{font:10px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;border:1px solid #2d2d32;border-radius:5px;padding:2px 6px;color:#b6b6bd}.menu{width:38px;height:38px;display:grid;place-items:center;border:1px solid #2b2b30;border-radius:10px;background:rgba(255,255,255,.03);color:#fff}.btn{display:inline-flex;align-items:center;gap:10px;border-radius:10px;border:1px solid rgba(212,175,55,0.4);background:rgba(255,255,255,.055);padding:13px 18px;font:800 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em;color:#fff}.btn.primary{background:#fff;color:#050505;border-color:#fff;box-shadow:0 0 40px rgba(255,255,255,.14)}.hero{position:relative;text-align:center;padding:105px 0 80px}.pill{display:inline-flex;gap:10px;align-items:center;border:1px solid rgba(212,175,55,0.4);background:rgba(255,255,255,.045);border-radius:999px;padding:8px 13px;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#d4d4d8}.pulse{width:7px;height:7px;border-radius:50%;background:#fff;box-shadow:0 0 18px #fff}.hero h1{font-size:clamp(50px,8vw,104px);line-height:1.02;letter-spacing:-.075em;margin:26px auto 18px;max-width:930px}.glow{text-shadow:0 0 32px rgba(255,255,255,.34)}.hero p{max-width:680px;margin:0 auto;color:#a1a1aa;font:500 15px/1.8 ui-monospace,monospace}.actions{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin-top:34px}.heroVideo{margin:56px auto 0;max-width:860px;border:1px solid rgba(255,255,255,.16);border-radius:24px;overflow:hidden;background:linear-gradient(180deg,#111,#070707);box-shadow:0 0 80px rgba(255,255,255,.08)}.fakeVideo{aspect-ratio:16/9;display:grid;place-items:center;background:radial-gradient(circle at 50% 40%,rgba(255,255,255,.18),transparent 20%),linear-gradient(135deg,#050505,#151515,#050505);background-size:160% 160%;animation:shift 7s infinite alternate}.fakeVideo img{width:110px;height:110px;border-radius:28px;object-fit:cover;opacity:.9}@keyframes shift{to{background-position:100% 60%}}.caption{padding:14px;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#888}.section{border-top:1px solid rgba(255,255,255,.10);padding:88px 0}.sectionHead{max-width:720px;margin-bottom:34px}.kicker{font:800 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:#fff;margin-bottom:10px}.section h2{font-size:clamp(34px,5vw,58px);line-height:1.02;letter-spacing:-.055em;margin:0}.muted{color:#a1a1aa}.features{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.card{border:1px solid rgba(255,255,255,.13);border-radius:28px;background:rgba(15,15,16,.72);padding:26px;transition:.2s ease;box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}.card:hover{border-color:rgba(255,255,255,.35);transform:translateY(-2px);box-shadow:0 0 60px rgba(255,255,255,.07)}.icon{width:38px;height:38px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.18);border-radius:12px;margin-bottom:16px}.card h3{margin:0 0 8px;font-size:18px}.card p{margin:0;color:#a1a1aa;font:500 12px/1.7 ui-monospace,monospace}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.stat{border:1px solid rgba(255,255,255,.13);border-radius:18px;background:rgba(15,15,16,.65);padding:22px;display:flex;gap:15px;align-items:center}.num{font-size:34px;font-weight:850}.pricing{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid rgba(255,255,255,.13);border-radius:28px;overflow:hidden;background:rgba(15,15,16,.45)}.plan{padding:32px}.plan+ .plan{border-left:1px solid rgba(255,255,255,.13);background:rgba(255,255,255,.035)}.price{font-size:64px;font-weight:900;letter-spacing:-.06em}.plan ul{list-style:none;padding:0;margin:22px 0;display:grid;gap:13px}.plan li:before{content:'✓';margin-right:10px}.cta{text-align:center;max-width:760px;margin:auto}.footer{border-top:1px solid rgba(255,255,255,.10);padding:34px 0;color:#777;font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}@media(max-width:850px){.features,.stats,.pricing{grid-template-columns:1fr}.plan+.plan{border-left:0;border-top:1px solid rgba(255,255,255,.13)}.brand{position:static;transform:none}.nav{gap:12px}.hero{text-align:left}.actions{justify-content:flex-start}}
-  </style>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Karma Protection — Lua Code Protection &amp; Licensing</title>
+    <meta name="description" content="Karma Protection protects Lua code with obfuscation, HWID-locked keys, hosted loadstrings, and a Discord synced panel." />
+    <link rel="icon" href="https://files.catbox.moe/vda6a2.png" />
+    <style>
+        /* ── Reset & Base ── */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        html {
+            scroll-behavior: smooth;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #f0f0f0;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            min-height: 100vh;
+            background-image: url('https://files.catbox.moe/vda6a2.png');
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+            position: relative;
+        }
+        
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: rgba(10, 10, 10, 0.85);
+            z-index: 0;
+            pointer-events: none;
+        }
+        
+        * {
+            position: relative;
+            z-index: 1;
+        }
+        
+        a {
+            color: inherit;
+            text-decoration: none;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+        
+        /* ── Scrollbar ── */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0a0a0a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #d4af37;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #e8c84a;
+        }
+        
+        /* ── Navbar ── */
+        .navbar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            background: rgba(10, 10, 10, 0.9);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(212, 175, 55, 0.2);
+            padding: 0 24px;
+            height: 72px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .navbar .container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
+            padding: 0;
+        }
+        
+        .nav-logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-weight: 700;
+            font-size: 20px;
+            color: #f0f0f0;
+        }
+        
+        .nav-logo img {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            border: 2px solid rgba(212, 175, 55, 0.4);
+            object-fit: cover;
+        }
+        
+        .nav-logo span {
+            background: linear-gradient(135deg, #d4af37, #f1d592);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .nav-links {
+            display: flex;
+            align-items: center;
+            gap: 32px;
+        }
+        
+        .nav-links a {
+            color: #a0a0a0;
+            font-size: 14px;
+            font-weight: 500;
+            transition: color 0.2s;
+            position: relative;
+        }
+        
+        .nav-links a:hover {
+            color: #d4af37;
+        }
+        
+        .nav-links a::after {
+            content: '';
+            position: absolute;
+            bottom: -4px;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background: #d4af37;
+            transition: width 0.3s;
+        }
+        
+        .nav-links a:hover::after {
+            width: 100%;
+        }
+        
+        .nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 14px;
+            transition: all 0.2s;
+            cursor: pointer;
+            border: none;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #d4af37, #f1d592);
+            color: #0a0a0a;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(212, 175, 55, 0.3);
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: #f0f0f0;
+            border: 1px solid rgba(212, 175, 55, 0.3);
+        }
+        
+        .btn-outline:hover {
+            border-color: #d4af37;
+            background: rgba(212, 175, 55, 0.1);
+        }
+        
+        /* ── Hero Section ── */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            padding: 120px 0 80px;
+        }
+        
+        .hero-content {
+            max-width: 700px;
+        }
+        
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 16px;
+            border-radius: 999px;
+            background: rgba(212, 175, 55, 0.15);
+            border: 1px solid rgba(212, 175, 55, 0.3);
+            font-size: 13px;
+            color: #d4af37;
+            margin-bottom: 24px;
+        }
+        
+        .hero-badge .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #d4af37;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 0.6; }
+            50% { opacity: 1; }
+        }
+        
+        .hero h1 {
+            font-size: clamp(48px, 6vw, 72px);
+            font-weight: 800;
+            line-height: 1.05;
+            letter-spacing: -0.02em;
+            margin-bottom: 20px;
+        }
+        
+        .hero h1 .gold {
+            background: linear-gradient(135deg, #d4af37, #f1d592);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .hero p {
+            font-size: 18px;
+            color: #a0a0a0;
+            max-width: 520px;
+            margin-bottom: 32px;
+            line-height: 1.7;
+        }
+        
+        .hero-buttons {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        
+        /* ── Features Section ── */
+        .section {
+            padding: 80px 0;
+        }
+        
+        .section-header {
+            text-align: center;
+            margin-bottom: 48px;
+        }
+        
+        .section-header h2 {
+            font-size: clamp(32px, 3.5vw, 44px);
+            font-weight: 700;
+            margin-bottom: 12px;
+        }
+        
+        .section-header p {
+            color: #a0a0a0;
+            font-size: 18px;
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 24px;
+        }
+        
+        .feature-card {
+            background: rgba(20, 20, 20, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 16px;
+            padding: 32px;
+            transition: all 0.3s;
+            backdrop-filter: blur(10px);
+        }
+        
+        .feature-card:hover {
+            border-color: rgba(212, 175, 55, 0.3);
+            transform: translateY(-4px);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+        }
+        
+        .feature-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            background: rgba(212, 175, 55, 0.15);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 16px;
+            font-size: 24px;
+            color: #d4af37;
+        }
+        
+        .feature-card h3 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #f0f0f0;
+        }
+        
+        .feature-card p {
+            color: #a0a0a0;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        
+        /* ── Stats Section ── */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 24px;
+            padding: 40px 0;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+        
+        .stat-item {
+            text-align: center;
+        }
+        
+        .stat-number {
+            font-size: 36px;
+            font-weight: 800;
+            color: #d4af37;
+            display: block;
+        }
+        
+        .stat-label {
+            color: #a0a0a0;
+            font-size: 14px;
+            margin-top: 4px;
+        }
+        
+        /* ── Footer ── */
+        .footer {
+            padding: 40px 0;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            text-align: center;
+            color: #a0a0a0;
+            font-size: 14px;
+        }
+        
+        .footer a {
+            color: #d4af37;
+        }
+        
+        /* ── Responsive ── */
+        @media (max-width: 768px) {
+            .nav-links {
+                display: none;
+            }
+            
+            .hero {
+                padding: 100px 0 60px;
+                text-align: center;
+            }
+            
+            .hero p {
+                margin-left: auto;
+                margin-right: auto;
+            }
+            
+            .hero-buttons {
+                justify-content: center;
+            }
+            
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
 </head>
 <body>
-  <div class="grid"></div>
-  <header><div class="container nav"><a class="menu" href="#features">☰</a><a class="brand" href="/"><img src="/assets/karma-logo.png" alt="Karma Protection"><span>Karma Protection</span><span class="beta">beta</span></a><a class="btn" href="${DISCORD_INVITE_URL}">Discord</a></div></header>
-  <main>
-    <section class="hero"><div class="container"><a class="pill" href="#builds"><span class="pulse"></span>The black & white standard for Lua security</a><h1>Protect. <span class="glow">Monetize.</span> Earn.</h1><p>Drop your project, get a secure build, and monetize with confidence. HWID-lock, whitelist keys, obfuscate, and ship straight from Discord.</p><div class="actions"><a class="btn primary" href="/login">Enter the lab</a><a class="btn" href="/dashboard?tab=obfuscate">Obfuscator</a><a class="btn" href="#features">Explore features</a></div><figure class="heroVideo"><div class="fakeVideo"><img src="/assets/karma-logo.png" alt="Karma Protection"></div><figcaption class="caption">Create a protected script in seconds.</figcaption></figure></div></section>
-    <section id="features" class="section"><div class="container"><div class="sectionHead"><div class="kicker">Karma Protection features</div><h2>Everything you need to ship and protect.</h2></div><div class="features"><div class="card"><div class="icon">CPU</div><h3>Custom Obfuscator</h3><p>Multi-layer local protection with anti-tamper checks, encoded payloads, and protected loadstrings.</p></div><div class="card"><div class="icon">KEY</div><h3>Whitelist System</h3><p>Hand out keys, let clients redeem, revoke, extend, and reset HWID access.</p></div><div class="card"><div class="icon">BOT</div><h3>Discord Bot</h3><p>Panels, script hosting, key generation, HWID bans, and API linking from Discord.</p></div><div class="card"><div class="icon">DASH</div><h3>Dashboard</h3><p>Scripts, protected builds, upload files, users, owner tools, and live status in one place.</p></div><div class="card"><div class="icon">ID</div><h3>HWID Tracker</h3><p>Lock each key to a single device on first run. Reset or ban HWIDs anytime.</p></div><div class="card"><div class="icon">LOAD</div><h3>Protected Loadstrings</h3><p>Served through a protected loader route so the raw endpoint is not exposed in the panel.</p></div></div></div></section>
-    <section id="builds" class="section"><div class="container"><div class="sectionHead"><div class="kicker">latest builds</div><h2>Shipping every week.</h2><p class="muted">Recent protections and platform improvements.</p></div><div class="features"><div class="card"><div class="kicker">v1.76.005</div><h3>Anti-dump hardening</h3><p>Payloads use runtime checks and decoys so dumped files come back useless.</p></div><div class="card"><div class="kicker">v1.76.004</div><h3>Loader execution recovery</h3><p>Protected loadstrings now fetch and execute through the /loadstring route.</p></div><div class="card"><div class="kicker">v1.76.003</div><h3>Runtime integrity</h3><p>Reduced fingerprinting and strengthened payload integrity checks.</p></div></div></div></section>
-    <section class="section"><div class="container"><div class="stats"><div class="stat"><div class="num">${scriptCount}</div><div><b>projects created</b><br><span class="muted">script products</span></div></div><div class="stat"><div class="num">${hostedCount}</div><div><b>scripts protected</b><br><span class="muted">hosted builds</span></div></div><div class="stat"><div class="num">${keyCount}</div><div><b>keys issued</b><br><span class="muted">license keys</span></div></div></div></div></section>
-    <section id="pricing" class="section"><div class="container"><div class="sectionHead" style="text-align:center;margin-inline:auto"><div class="kicker">pricing</div><h2>Simple plans. Real protection.</h2></div><div class="pricing"><div class="plan"><div class="kicker">Citizen</div><div class="price">$0</div><p class="muted">forever</p><ul><li>Discord bot + panel deploy</li><li>Whitelist keys</li><li>Standard obfuscation</li><li>20 scripts by default</li></ul><a class="btn" href="/login">Get Started Free</a></div><div class="plan"><div class="kicker">Royal</div><div class="price">$3</div><p class="muted">month</p><ul><li>Higher script limits</li><li>Maximum obfuscation</li><li>Priority builds</li><li>Owner controlled upgrades</li></ul><a class="btn primary" href="/login">Upgrade</a></div></div></div></section>
-    <section class="section"><div class="container cta"><h2>Ready to take back control?</h2><p class="muted">Sign in with Discord, upload your first script, and ship in minutes.</p><div class="actions"><a class="btn primary" href="/login">Sign in with Discord</a><a class="btn" href="${DISCORD_INVITE_URL}">Join the Discord</a></div></div></section>
-  </main>
-  <footer class="container footer"><span>© Karma Protection</span><span>Protect, Monetize, Earn</span></footer>
+    <nav class="navbar">
+        <div class="container">
+            <a href="/" class="nav-logo">
+                <img src="https://files.catbox.moe/vda6a2.png" alt="Karma Protection" />
+                <span>Karma Protection</span>
+            </a>
+            <div class="nav-links">
+                <a href="#features">Features</a>
+                <a href="#stats">Stats</a>
+                <a href="${DISCORD_INVITE_URL}" target="_blank">Discord</a>
+            </div>
+            <div class="nav-actions">
+                <a href="/login" class="btn btn-primary">Dashboard</a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="hero">
+        <div class="container">
+            <div class="hero-content">
+                <div class="hero-badge">
+                    <span class="dot"></span>
+                    Secure Your Lua Scripts
+                </div>
+                <h1>Protect. <span class="gold">Monetize.</span> Earn.</h1>
+                <p>The most reliable whitelist and protection service for Lua developers. Drop your project, get a secure build, and monetize with confidence.</p>
+                <div class="hero-buttons">
+                    <a href="/login" class="btn btn-primary">Get Started →</a>
+                    <a href="${DISCORD_INVITE_URL}" target="_blank" class="btn btn-outline">Join Discord</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="features" class="section">
+        <div class="container">
+            <div class="section-header">
+                <h2>Powerful Features You'll Love</h2>
+                <p>Everything you need to manage your scripts and users automatically.</p>
+            </div>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h3>Super Fast</h3>
+                    <p>Our advanced lua authentication system ensures fast and reliable authentication.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔒</div>
+                    <h3>HWID Locking</h3>
+                    <p>Prevent unauthorized sharing with robust hardware ID locking and verification.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔑</div>
+                    <h3>Key System</h3>
+                    <p>Mass generate day-locked or lifetime keys and export them for your selling platform.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📊</div>
+                    <h3>Real-time Analytics</h3>
+                    <p>Track usage, execution times, regions, and potential threats in real-time.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🤖</div>
+                    <h3>Discord Bot</h3>
+                    <p>Ready-to-use Discord bot where users can redeem keys, reset HWID, and manage access.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">💰</div>
+                    <h3>Ad System</h3>
+                    <p>Built-in ad link system with effective anti-bypass, protecting your revenue.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="stats" class="section">
+        <div class="container">
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <span class="stat-number">${scriptCount}</span>
+                    <span class="stat-label">Scripts Protected</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-number">${keyCount}</span>
+                    <span class="stat-label">Keys Issued</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-number">${hostedCount}</span>
+                    <span class="stat-label">Hosted Scripts</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-number">99.9%</span>
+                    <span class="stat-label">Uptime</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="container">
+            <p>© ${new Date().getFullYear()} Karma Protection — Protect, Monetize, Earn</p>
+            <p style="margin-top: 8px; font-size: 12px;">
+                <a href="${DISCORD_INVITE_URL}" target="_blank">Discord</a> • 
+                <a href="/dashboard">Dashboard</a>
+            </p>
+        </div>
+    </footer>
 </body>
 </html>`;
 }
@@ -1632,7 +1809,7 @@ function makeUserApiKey(userId) {
 
 function discordDashboardPage(user, req = { query: {} }) {
   const username = escapeHtml(user.global_name || user.username || 'Discord User');
-  const avatar = user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=128` : '/assets/karma-logo.png';
+  const avatar = user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=128` : 'https://files.catbox.moe/vda6a2.png';
   const apiKey = makeUserApiKey(user.id);
   let tab = String(req.query.tab || 'overview');
   if (['keys','how','tutorials','redeem','settings','discord','sources','storage'].includes(tab)) tab = 'overview';
@@ -1689,7 +1866,7 @@ function discordDashboardPage(user, req = { query: {} }) {
     content = `<div class="card heroCard"><p class="eyebrow">Overview</p><h2>Dashboard</h2><p class="muted">Manage scripts, sources, obfuscation, tutorials, Discord links, redeem codes, and owner tools from one clean dashboard.</p><div class="stats"><div class="stat"><div class="num">${scripts.length}</div><span>Scripts used</span></div><div class="stat"><div class="num">${remaining}</div><span>Slots left</span></div><div class="stat"><div class="num">${scriptQuota}</div><span>Max scripts</span></div></div><div class="anime"></div></div>`;
   }
 
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma Dashboard</title><style>:root{--bg:#000000;--shell:rgba(11,11,12,0.9);--panel:rgba(16,16,17,0.8);--panel2:rgba(21,21,22,0.8);--line:rgba(212,175,55,0.25);--muted:#a1a1aa;--text:#f8fafc;--gold:#d4af37;--gold2:#f1d592}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:linear-gradient(rgba(0,0,0,0.75),rgba(0,0,0,0.75)),url("/assets/bg.png") center/cover fixed no-repeat,#000000;color:var(--text);font-family:"SF Pro Display","Aptos","Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.01em}body:before{content:'';position:fixed;right:-140px;bottom:-140px;width:560px;height:560px;background:url('/assets/karma-logo.png') center/contain no-repeat;opacity:.045;pointer-events:none}a{color:inherit;text-decoration:none}.page{padding:28px}.shell{max-width:1500px;margin:0 auto;min-height:calc(100vh - 56px);display:grid;grid-template-columns:280px 270px 1fr;border:1px solid rgba(212,175,55,0.4);border-radius:34px;overflow:hidden;background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.015));box-shadow:0 34px 140px rgba(0,0,0,.58),0 0 0 1px rgba(255,255,255,.025)}.side{background:linear-gradient(180deg,rgba(12,12,12,.96),rgba(5,5,5,.96));border-right:1px solid rgba(255,255,255,.20);padding:22px;overflow:auto;box-shadow:18px 0 80px rgba(0,0,0,.28)}.brand{display:flex;gap:12px;align-items:center;border-bottom:1px solid #242427;padding-bottom:20px}.brand img,.avatar{width:48px;height:48px;border-radius:16px;object-fit:cover;border:1px solid rgba(212,175,55,0.6);box-shadow:0 0 35px rgba(212,175,55,0.3)}.brand b{display:block;font-size:18px;font-weight:850}.brand small,.muted,small{color:var(--muted)}.nav{margin-top:20px}.nav a{display:flex;align-items:center;padding:12px 13px;border-radius:14px;color:#d4d4d8;font-weight:720;margin-bottom:4px}.nav a:hover,.nav a.active{background:linear-gradient(90deg,rgba(255,255,255,.18),rgba(255,255,255,.035));color:#fff;box-shadow:inset 3px 0 0 var(--gold)}.scriptsPane{background:rgba(7,7,7,.78);border-right:1px solid rgba(255,255,255,.16);padding:20px;overflow:auto}.scriptLink{display:block;border:1px solid rgba(255,255,255,.14);background:rgba(14,14,14,.86);border-radius:16px;padding:13px;margin-bottom:10px}.scriptLink.active{border-color:var(--gold);background:linear-gradient(180deg,rgba(255,255,255,.14),rgba(18,18,18,.88));box-shadow:0 10px 34px rgba(255,255,255,.08)}.main{padding:28px;min-width:0;position:relative;overflow:hidden}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.profile{display:flex;gap:12px;align-items:center}.card{border:1px solid rgba(255,255,255,.16);border-radius:28px;background:linear-gradient(180deg,rgba(24,24,24,.92),rgba(8,8,8,.97));padding:28px;box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 26px 90px rgba(0,0,0,.32);margin-bottom:18px;position:relative;z-index:1}.card h2{font-size:clamp(32px,4vw,56px);line-height:.95;letter-spacing:-.06em;margin:6px 0 12px}.eyebrow{color:#a1a1aa;text-transform:uppercase;letter-spacing:.18em;font-size:12px;font-weight:850;margin:0 0 8px}.btn,button{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--gold2);background:linear-gradient(180deg,var(--gold2),var(--gold));color:#000;border-radius:999px;padding:12px 18px;font-weight:950;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;box-shadow:0 12px 38px rgba(255,255,255,.16)}.btn:hover,button:hover{transform:translateY(-1px);box-shadow:0 14px 42px rgba(255,255,255,.10)}.btn.dark{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32);box-shadow:none}.secondary{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32)}.buttonRow{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:6px}.danger{background:#220f0f;color:#ffb4ad;border-color:#5b2521}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}.stat{border:1px solid rgba(255,255,255,.14);border-radius:18px;background:rgba(10,10,10,.82);padding:18px}.num{font-size:38px;font-weight:900;letter-spacing:-.05em}select{background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:10px;font:inherit}.inlineForm{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}input,textarea{width:100%;background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:12px;margin:8px 0 14px;font:inherit}textarea{min-height:260px}.check{display:flex;gap:10px;align-items:center}.check input{width:auto}.block{display:block;white-space:pre-wrap;word-break:break-all;padding:12px;margin:10px 0;background:#080809;border:1px solid #343438;border-radius:14px}.row{border:1px solid #27272a;border-radius:14px;padding:12px;margin:8px 0;background:#0b0b0c}.featureGrid,.stepsDash{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:16px}.featureGrid div,.stepsDash div{border:1px solid #27272a;border-radius:16px;background:#0b0b0c;padding:16px}.stepsDash span{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#fff;color:#000;font-weight:900}.anime{height:220px;border-radius:24px;border:1px solid #27272a;margin-top:22px;background:radial-gradient(circle at 30% 50%,rgba(255,255,255,.18),transparent 18%),radial-gradient(circle at 70% 50%,rgba(255,255,255,.11),transparent 20%),linear-gradient(120deg,#000,#111,#000);background-size:160% 160%;animation:movebg 6s infinite alternate;position:relative;overflow:hidden}.anime:after{content:'';position:absolute;inset:-40%;background:conic-gradient(from 0deg,transparent,rgba(255,255,255,.12),transparent 35%);animation:spin 8s linear infinite}@keyframes movebg{to{background-position:100% 60%}}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:1100px){.page{padding:12px}.shell{grid-template-columns:1fr;border-radius:22px}.side,.scriptsPane{border-right:0;border-bottom:1px solid var(--line)}.stats,.featureGrid,.stepsDash{grid-template-columns:1fr}.top{align-items:flex-start;gap:16px;flex-direction:column}}</style></head><body><div class="page"><div class="shell"><aside class="side"><div class="brand"><img src="/assets/karma-logo.png"><div><b>Karma Protection</b><small>${username}</small></div></div><nav class="nav"><a class="${tab==='overview'?'active':''}" href="/dashboard">Overview</a><a class="${tab==='scripts'?'active':''}" href="/dashboard?tab=scripts">Scripts</a><a class="${tab==='obfuscate'?'active':''}" href="/dashboard?tab=obfuscate">Obfuscate</a>${isOwner?`<a class="${tab==='owner'?'active':''}" href="/dashboard?tab=owner">Owner Panel</a>`:''}<a href="/logout">Logout</a></nav></aside><aside class="scriptsPane"><h3>Scripts</h3>${scriptLinks}<a class="btn" href="/dashboard?tab=scripts">New Script</a></aside><main class="main"><div class="top"><div class="profile"><img class="avatar" src="${avatar}"><div><b>${username}</b><br><small>${myScriptCount}/${scriptQuota} scripts used</small></div></div><div class="buttonRow"><a class="btn dark" href="/dashboard?tab=obfuscate">Obfuscator</a><a class="btn dark" href="/">Home</a></div></div>${content}</main></div></div><script>document.getElementById('fileInput')?.addEventListener('change', async e => { const f=e.target.files[0]; if(!f) return; document.querySelector('input[name="name"]').value ||= f.name.replace(/\.(lua|txt)$/i,''); document.getElementById('codeBox').value = await f.text(); });</script></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma Dashboard</title><style>:root{--bg:#000000;--shell:rgba(11,11,12,0.9);--panel:rgba(16,16,17,0.8);--panel2:rgba(21,21,22,0.8);--line:rgba(212,175,55,0.25);--muted:#a1a1aa;--text:#f8fafc;--gold:#d4af37;--gold2:#f1d592}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:linear-gradient(rgba(0,0,0,0.75),rgba(0,0,0,0.75)),url("https://files.catbox.moe/vda6a2.png") center/cover fixed no-repeat,#000000;color:var(--text);font-family:"SF Pro Display","Aptos","Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;letter-spacing:-.01em}a{color:inherit;text-decoration:none}.page{padding:28px}.shell{max-width:1500px;margin:0 auto;min-height:calc(100vh - 56px);display:grid;grid-template-columns:280px 270px 1fr;border:1px solid rgba(212,175,55,0.4);border-radius:34px;overflow:hidden;background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.015));box-shadow:0 34px 140px rgba(0,0,0,.58),0 0 0 1px rgba(255,255,255,.025)}.side{background:linear-gradient(180deg,rgba(12,12,12,.96),rgba(5,5,5,.96));border-right:1px solid rgba(255,255,255,.20);padding:22px;overflow:auto;box-shadow:18px 0 80px rgba(0,0,0,.28)}.brand{display:flex;gap:12px;align-items:center;border-bottom:1px solid #242427;padding-bottom:20px}.brand img,.avatar{width:48px;height:48px;border-radius:16px;object-fit:cover;border:1px solid rgba(212,175,55,0.6);box-shadow:0 0 35px rgba(212,175,55,0.3)}.brand b{display:block;font-size:18px;font-weight:850}.brand small,.muted,small{color:var(--muted)}.nav{margin-top:20px}.nav a{display:flex;align-items:center;padding:12px 13px;border-radius:14px;color:#d4d4d8;font-weight:720;margin-bottom:4px}.nav a:hover,.nav a.active{background:linear-gradient(90deg,rgba(255,255,255,.18),rgba(255,255,255,.035));color:#fff;box-shadow:inset 3px 0 0 var(--gold)}.scriptsPane{background:rgba(7,7,7,.78);border-right:1px solid rgba(255,255,255,.16);padding:20px;overflow:auto}.scriptLink{display:block;border:1px solid rgba(255,255,255,.14);background:rgba(14,14,14,.86);border-radius:16px;padding:13px;margin-bottom:10px}.scriptLink.active{border-color:var(--gold);background:linear-gradient(180deg,rgba(255,255,255,.14),rgba(18,18,18,.88));box-shadow:0 10px 34px rgba(255,255,255,.08)}.main{padding:28px;min-width:0;position:relative;overflow:hidden}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.profile{display:flex;gap:12px;align-items:center}.card{border:1px solid rgba(255,255,255,.16);border-radius:28px;background:linear-gradient(180deg,rgba(24,24,24,.92),rgba(8,8,8,.97));padding:28px;box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 26px 90px rgba(0,0,0,.32);margin-bottom:18px;position:relative;z-index:1}.card h2{font-size:clamp(32px,4vw,56px);line-height:.95;letter-spacing:-.06em;margin:6px 0 12px}.eyebrow{color:#a1a1aa;text-transform:uppercase;letter-spacing:.18em;font-size:12px;font-weight:850;margin:0 0 8px}.btn,button{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--gold2);background:linear-gradient(180deg,var(--gold2),var(--gold));color:#000;border-radius:999px;padding:12px 18px;font-weight:950;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;box-shadow:0 12px 38px rgba(255,255,255,.16)}.btn:hover,button:hover{transform:translateY(-1px);box-shadow:0 14px 42px rgba(255,255,255,.10)}.btn.dark{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32);box-shadow:none}.secondary{background:rgba(10,10,10,.75);color:#fff;border-color:rgba(255,255,255,.32)}.buttonRow{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:6px}.danger{background:#220f0f;color:#ffb4ad;border-color:#5b2521}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}.stat{border:1px solid rgba(255,255,255,.14);border-radius:18px;background:rgba(10,10,10,.82);padding:18px}.num{font-size:38px;font-weight:900;letter-spacing:-.05em}select{background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:10px;font:inherit}.inlineForm{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}input,textarea{width:100%;background:#080809;color:#fff;border:1px solid #343438;border-radius:14px;padding:12px;margin:8px 0 14px;font:inherit}textarea{min-height:260px}.check{display:flex;gap:10px;align-items:center}.check input{width:auto}.block{display:block;white-space:pre-wrap;word-break:break-all;padding:12px;margin:10px 0;background:#080809;border:1px solid #343438;border-radius:14px}.row{border:1px solid #27272a;border-radius:14px;padding:12px;margin:8px 0;background:#0b0b0c}.featureGrid,.stepsDash{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:16px}.featureGrid div,.stepsDash div{border:1px solid #27272a;border-radius:16px;background:#0b0b0c;padding:16px}.stepsDash span{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#fff;color:#000;font-weight:900}.anime{height:220px;border-radius:24px;border:1px solid #27272a;margin-top:22px;background:radial-gradient(circle at 30% 50%,rgba(255,255,255,.18),transparent 18%),radial-gradient(circle at 70% 50%,rgba(255,255,255,.11),transparent 20%),linear-gradient(120deg,#000,#111,#000);background-size:160% 160%;animation:movebg 6s infinite alternate;position:relative;overflow:hidden}.anime:after{content:'';position:absolute;inset:-40%;background:conic-gradient(from 0deg,transparent,rgba(255,255,255,.12),transparent 35%);animation:spin 8s linear infinite}@keyframes movebg{to{background-position:100% 60%}}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:1100px){.page{padding:12px}.shell{grid-template-columns:1fr;border-radius:22px}.side,.scriptsPane{border-right:0;border-bottom:1px solid var(--line)}.stats,.featureGrid,.stepsDash{grid-template-columns:1fr}.top{align-items:flex-start;gap:16px;flex-direction:column}}</style></head><body><div class="page"><div class="shell"><aside class="side"><div class="brand"><img src="https://files.catbox.moe/vda6a2.png"><div><b>Karma Protection</b><small>${username}</small></div></div><nav class="nav"><a class="${tab==='overview'?'active':''}" href="/dashboard">Overview</a><a class="${tab==='scripts'?'active':''}" href="/dashboard?tab=scripts">Scripts</a><a class="${tab==='obfuscate'?'active':''}" href="/dashboard?tab=obfuscate">Obfuscate</a>${isOwner?`<a class="${tab==='owner'?'active':''}" href="/dashboard?tab=owner">Owner Panel</a>`:''}<a href="/logout">Logout</a></nav></aside><aside class="scriptsPane"><h3>Scripts</h3>${scriptLinks}<a class="btn" href="/dashboard?tab=scripts">New Script</a></aside><main class="main"><div class="top"><div class="profile"><img class="avatar" src="${avatar}"><div><b>${username}</b><br><small>${myScriptCount}/${scriptQuota} scripts used</small></div></div><div class="buttonRow"><a class="btn dark" href="/dashboard?tab=obfuscate">Obfuscator</a><a class="btn dark" href="/">Home</a></div></div>${content}</main></div></div><script>document.getElementById('fileInput')?.addEventListener('change', async e => { const f=e.target.files[0]; if(!f) return; document.querySelector('input[name="name"]').value ||= f.name.replace(/\.(lua|txt)$/i,''); document.getElementById('codeBox').value = await f.text(); });</script></body></html>`;
 }
 
 function makeSession(user) {
@@ -1737,7 +1914,6 @@ function requireDashboardUser(req, res) {
   return user;
 }
 
-
 function escapeHtml(value) {
   return String(value)
     .replaceAll('&', '&amp;')
@@ -1746,7 +1922,6 @@ function escapeHtml(value) {
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
 }
-
 
 // ---------------- Express API ----------------
 function startApiServer() {
@@ -2061,7 +2236,6 @@ function startApiServer() {
     res.json({ ok: true, scripts: rows.map(r => ({ ...r, script_url: `${publicBaseUrl()}/script/${r.id}.lua`, loadstring_url: `${publicBaseUrl()}/loadstring/${r.id}` })) });
   });
 
-  
   app.post('/api/log-execution', (req, res) => {
     const { script_id, key, hwid, executor } = req.body || {};
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
@@ -2127,7 +2301,6 @@ function startApiServer() {
     return res.status(500).type('html').send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karma Protection Error</title><style>body{margin:0;background:#000;color:#fff;font-family:system-ui;display:grid;place-items:center;min-height:100vh}.card{width:min(680px,92%);border:1px solid #333;border-radius:24px;background:#090909;padding:28px}a{color:#fff}</style></head><body><div class="card"><h1>Something went wrong</h1><p>The website hit an error instead of loading this page.</p><p>Try signing in again, or check Render logs for the exact error.</p><a href="/">Back home</a></div></body></html>`);
   });
 
-  // Render requires process.env.PORT for web services.
   const port = Number(process.env.PORT || process.env.API_PORT || 3000);
   app.listen(port, '0.0.0.0', () => console.log(`Web server listening on port ${port}`));
 }
