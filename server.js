@@ -1,8 +1,14 @@
-// ═══════════════════════════════════════════════════════════════════════════════
-//  KARMA HOSTING BOT — server.js
-//  Discord.js v14 · Prisma · SQLite
-// ═══════════════════════════════════════════════════════════════════════════════
+// server.js
+// Karma Protection v6.3 - LuauProtect Style UI
+// Full Website + Discord Bot Integration
 
+require('dotenv').config();
+
+const express = require('express');
+const Database = require('better-sqlite3');
+const crypto = require('crypto');
+const path = require('path');
+const session = require('express-session');
 const {
   Client,
   GatewayIntentBits,
@@ -16,334 +22,1357 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-} = require("discord.js");
-const { PrismaClient } = require("@prisma/client");
+} = require('discord.js');
 
-// ─── Configuration ────────────────────────────────────────────────────────────
-const PREFIX       = "/";
-const BRAND_COLOR  = 0xD4AF37;
-const COOLDOWN_MS  = 24 * 60 * 60 * 1000;
-const TOKEN        = "YOUR_BOT_TOKEN_HERE";
-const OWNER_ID     = "YOUR_DISCORD_ID_HERE";
-const BASE_URL     = "https://karma-hosting.space-z.ai";
-const DB_PATH      = "file:./db/custom.db";
+const {
+  DISCORD_TOKEN,
+  CLIENT_ID,
+  GUILD_ID,
+  DATABASE_PATH = './data.sqlite',
+  PUBLIC_BASE_URL = 'https://your-app.up.railway.app',
+  SESSION_SECRET,
+  DISCORD_INVITE_URL = 'https://discord.gg/your-invite',
+  OWNER_ID = 'YOUR_DISCORD_ID_HERE',
+  BRAND_COLOR = 0xD4AF37,
+  PREFIX = '/'
+} = process.env;
 
-const prisma = new PrismaClient({ datasourceUrl: DB_PATH });
-const bannedHwids = new Set();
+const SESSION_SIGNING_SECRET = SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
-// ─── Helper Functions ─────────────────────────────────────────────────────────
-
-function maskKey(key) {
-  return "KARMA-****-****-" + key.slice(-4).toUpperCase();
+if (!DISCORD_TOKEN) {
+  console.error('Missing DISCORD_TOKEN environment variable.');
+  process.exit(1);
 }
 
-function timeRemaining(ms) {
-  const h = Math.floor(ms / 3600000);
-  const m = Math.floor((ms % 3600000) / 60000);
-  if (h > 0) return h + "h " + m + "m";
-  return m + "m " + Math.floor((ms % 60000) / 1000) + "s";
-}
+// ---------------- Database ----------------
+const db = new Database(DATABASE_PATH);
+db.pragma('journal_mode = WAL');
 
-function formatExpiry(d) {
-  if (!d) return "Permanent";
-  if (d.getTime() < Date.now()) return "Expired";
-  return "<t:" + Math.floor(d.getTime() / 1000) + ":R>";
-}
+db.exec(`
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  discord_id TEXT UNIQUE,
+  username TEXT,
+  avatar TEXT,
+  access_token TEXT,
+  provider TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
-function embed() {
-  return new EmbedBuilder()
-    .setColor(BRAND_COLOR)
-    .setFooter({ text: "Karma Hosting" })
-    .setTimestamp();
-}
+CREATE TABLE IF NOT EXISTS scripts (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  code TEXT,
+  version TEXT DEFAULT '1.0.0',
+  status TEXT DEFAULT 'active',
+  ffa_mode INTEGER DEFAULT 0,
+  compress_mode INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
 
-function ok(title, desc) {
-  return embed().setTitle("\u2705 " + title).setDescription(desc).setColor(0x22c55e);
-}
+CREATE TABLE IF NOT EXISTS keys (
+  id TEXT PRIMARY KEY,
+  script_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  key TEXT UNIQUE NOT NULL,
+  hwid TEXT,
+  note TEXT,
+  expires_at TEXT,
+  resettable TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_used_at TEXT,
+  FOREIGN KEY(script_id) REFERENCES scripts(id),
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
 
-function err(title, desc) {
-  return embed().setTitle("\u274c " + title).setDescription(desc).setColor(0xef4444);
+CREATE TABLE IF NOT EXISTS banned_hwids (
+  hwid TEXT PRIMARY KEY,
+  reason TEXT,
+  banned_by TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS panels (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  channel_id TEXT NOT NULL,
+  script_id TEXT NOT NULL,
+  hwid_cooldown INTEGER DEFAULT 180,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(user_id) REFERENCES users(id),
+  FOREIGN KEY(script_id) REFERENCES scripts(id)
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  sid TEXT PRIMARY KEY,
+  sess TEXT NOT NULL,
+  expire INTEGER NOT NULL
+);
+`);
+
+// ---------------- Helper Functions ----------------
+function makeId(prefix = 'script') {
+  return `${prefix}_${crypto.randomBytes(6).toString('hex')}`;
 }
 
 function generateKey() {
-  const c = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let r = "KARMA-";
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let result = 'KARMA-';
   for (let i = 0; i < 4; i++) {
-    if (i > 0) r += "-";
+    if (i > 0) result += '-';
     for (let j = 0; j < 4; j++) {
-      r += c.charAt(Math.floor(Math.random() * c.length));
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
     }
   }
-  return r;
+  return result;
 }
 
-async function resolveUser(discordId) {
-  return prisma.user.findFirst({ where: { discordId } });
+function maskKey(key) {
+  if (!key) return 'Invalid';
+  return 'KARMA-****-****-' + key.slice(-4).toUpperCase();
 }
 
-async function findScript(userId, q) {
-  return prisma.script.findFirst({
-    where: {
-      userId,
-      OR: [{ id: q }, { name: { equals: q, mode: "insensitive" } }],
-    },
+function addHours(hours) {
+  if (!hours || hours <= 0) return null;
+  const d = new Date();
+  d.setHours(d.getHours() + hours);
+  return d.toISOString();
+}
+
+function isExpired(expiresAt) {
+  return Boolean(expiresAt && new Date(expiresAt).getTime() < Date.now());
+}
+
+function publicBaseUrl() {
+  if (PUBLIC_BASE_URL) return PUBLIC_BASE_URL.replace(/\/$/, '');
+  return `http://localhost:${process.env.PORT || 3000}`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function getSessionUser(req) {
+  return req.session.user || null;
+}
+
+function requireAuth(req, res, next) {
+  if (req.session.user) return next();
+  res.redirect('/');
+}
+
+// ---------------- Express App ----------------
+const app = express();
+
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.use(session({
+  secret: SESSION_SIGNING_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: { secure: PUBLIC_BASE_URL && PUBLIC_BASE_URL.startsWith('https'), maxAge: 7 * 24 * 60 * 60 * 1000 }
+}));
+
+// ---------------- API Routes ----------------
+app.get('/api/data', (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.json({ error: 'Not authenticated' });
+  
+  const scripts = db.prepare('SELECT * FROM scripts WHERE user_id = ? ORDER BY created_at DESC').all(user.id);
+  const panels = db.prepare('SELECT * FROM panels WHERE user_id = ? ORDER BY created_at DESC').all(user.id);
+  const keys = db.prepare('SELECT * FROM keys WHERE user_id = ? ORDER BY created_at DESC').all(user.id);
+  const banned = db.prepare('SELECT * FROM banned_hwids ORDER BY created_at DESC').all();
+  
+  res.json({
+    scripts,
+    panels,
+    keys,
+    bannedHWIDs: banned,
+    serverTime: Date.now()
   });
-}
+});
 
-async function safeSend(msg, content) {
-  try {
-    await msg.reply(content);
-  } catch {
-    try {
-      await msg.channel.send(content);
-    } catch {}
+app.post('/api/create-script', (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  
+  const { name, code, compressMode } = req.body;
+  if (!name || !code) return res.status(400).json({ error: 'Missing name or code' });
+  
+  const id = makeId('script');
+  db.prepare(`
+    INSERT INTO scripts (id, user_id, name, code, version, status, compress_mode)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(id, user.id, name, code, '1.0.0', 'active', compressMode ? 1 : 0);
+  
+  res.json({ success: true, id });
+});
+
+app.post('/api/update-script', (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  
+  const { id, name, code } = req.body;
+  if (!id || !name || !code) return res.status(400).json({ error: 'Missing fields' });
+  
+  const existing = db.prepare('SELECT * FROM scripts WHERE id = ? AND user_id = ?').get(id, user.id);
+  if (!existing) return res.status(404).json({ error: 'Script not found' });
+  
+  db.prepare('UPDATE scripts SET name = ?, code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')
+    .run(name, code, id, user.id);
+  
+  res.json({ success: true });
+});
+
+app.put('/api/scripts/:id/toggle', (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  
+  const { id } = req.params;
+  const script = db.prepare('SELECT * FROM scripts WHERE id = ? AND user_id = ?').get(id, user.id);
+  if (!script) return res.status(404).json({ error: 'Script not found' });
+  
+  const newStatus = script.status === 'active' ? 'disabled' : 'active';
+  db.prepare('UPDATE scripts SET status = ? WHERE id = ? AND user_id = ?')
+    .run(newStatus, id, user.id);
+  
+  res.json({ success: true, status: newStatus });
+});
+
+app.put('/api/scripts/:id/ffa', (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  
+  const { id } = req.params;
+  const script = db.prepare('SELECT * FROM scripts WHERE id = ? AND user_id = ?').get(id, user.id);
+  if (!script) return res.status(404).json({ error: 'Script not found' });
+  
+  const newFfa = script.ffa_mode ? 0 : 1;
+  db.prepare('UPDATE scripts SET ffa_mode = ? WHERE id = ? AND user_id = ?')
+    .run(newFfa, id, user.id);
+  
+  res.json({ success: true, ffa_mode: newFfa });
+});
+
+app.post('/api/delete-script', (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  
+  const { id } = req.body;
+  const script = db.prepare('SELECT * FROM scripts WHERE id = ? AND user_id = ?').get(id, user.id);
+  if (!script) return res.status(404).json({ error: 'Script not found' });
+  
+  db.prepare('DELETE FROM scripts WHERE id = ? AND user_id = ?').run(id, user.id);
+  res.json({ success: true });
+});
+
+app.post('/api/create-panel', (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  
+  const { name, description, channelId, scriptId, hwidCooldown } = req.body;
+  if (!name || !channelId || !scriptId) return res.status(400).json({ error: 'Missing fields' });
+  
+  const id = makeId('panel');
+  db.prepare(`
+    INSERT INTO panels (id, user_id, name, description, channel_id, script_id, hwid_cooldown)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(id, user.id, name, description || '', channelId, scriptId, hwidCooldown || 180);
+  
+  res.json({ success: true, id });
+});
+
+app.post('/api/delete-panel', (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  
+  const { id } = req.body;
+  db.prepare('DELETE FROM panels WHERE id = ? AND user_id = ?').run(id, user.id);
+  res.json({ success: true });
+});
+
+app.post('/api/send-panel', (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  
+  const { panelId } = req.body;
+  const panel = db.prepare('SELECT * FROM panels WHERE id = ? AND user_id = ?').get(panelId, user.id);
+  if (!panel) return res.status(404).json({ error: 'Panel not found' });
+  
+  res.json({ success: true });
+});
+
+app.post('/api/generate-key', (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  
+  const { panelId, durationHours, note } = req.body;
+  if (!panelId) return res.status(400).json({ error: 'Panel ID required' });
+  
+  const panel = db.prepare('SELECT * FROM panels WHERE id = ? AND user_id = ?').get(panelId, user.id);
+  if (!panel) return res.status(404).json({ error: 'Panel not found' });
+  
+  const key = generateKey();
+  const expiresAt = durationHours > 0 ? addHours(durationHours) : null;
+  const id = makeId('key');
+  
+  db.prepare(`
+    INSERT INTO keys (id, script_id, user_id, key, note, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(id, panel.script_id, user.id, key, note || '', expiresAt);
+  
+  res.json({ success: true, key });
+});
+
+app.post('/api/delete-key', (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  
+  const { key } = req.body;
+  db.prepare('DELETE FROM keys WHERE key = ? AND user_id = ?').run(key, user.id);
+  res.json({ success: true });
+});
+
+app.post('/api/add-time-all', (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  
+  const { hours } = req.body;
+  if (!hours || isNaN(hours)) return res.status(400).json({ error: 'Invalid hours' });
+  
+  const keys = db.prepare('SELECT * FROM keys WHERE user_id = ? AND expires_at IS NOT NULL').all(user.id);
+  for (const k of keys) {
+    const currentExpiry = new Date(k.expires_at);
+    currentExpiry.setHours(currentExpiry.getHours() + parseInt(hours));
+    db.prepare('UPDATE keys SET expires_at = ? WHERE key = ?').run(currentExpiry.toISOString(), k.key);
   }
-}
+  
+  res.json({ success: true });
+});
 
-async function safeDm(msg, content) {
-  try {
-    await msg.author.send(content);
-    return true;
-  } catch {
-    return false;
+app.post('/api/ban-hwid', (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  
+  const { hwid } = req.body;
+  if (!hwid) return res.status(400).json({ error: 'HWID required' });
+  
+  db.prepare('INSERT OR REPLACE INTO banned_hwids (hwid, banned_by) VALUES (?, ?)')
+    .run(hwid, user.id);
+  
+  res.json({ success: true });
+});
+
+app.post('/api/unban-hwid', (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  
+  const { hwid } = req.body;
+  if (!hwid) return res.status(400).json({ error: 'HWID required' });
+  
+  db.prepare('DELETE FROM banned_hwids WHERE hwid = ?').run(hwid);
+  res.json({ success: true });
+});
+
+// ---------------- Discord Auth Routes ----------------
+app.get('/api/auth/discord', (req, res) => {
+  const state = crypto.randomBytes(18).toString('hex');
+  req.session.oauth_state = state;
+  
+  const redirectUri = `${publicBaseUrl()}/api/auth/discord/callback`;
+  const params = new URLSearchParams({
+    client_id: CLIENT_ID,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: 'identify guilds',
+    state
+  });
+  
+  res.redirect(`https://discord.com/oauth2/authorize?${params.toString()}`);
+});
+
+app.get('/api/auth/discord/callback', async (req, res) => {
+  const { code, state } = req.query;
+  
+  if (!code || !state || state !== req.session.oauth_state) {
+    return res.status(400).send('Invalid OAuth state');
   }
-}
-
-function epErr(title, desc) {
-  return { embeds: [err(title, desc)], ephemeral: true };
-}
-
-function epOk(title, desc) {
-  return { embeds: [ok(title, desc)], ephemeral: true };
-}
-
-function epEmbed(e) {
-  return { embeds: [e], ephemeral: true };
-}
-
-// ─── Button Handler ───────────────────────────────────────────────────────────
-
-async function handleButton(interaction) {
-  const customId = interaction.customId;
-  if (customId.length < 3 || customId[0] !== "p") return;
-
-  const action = customId[1];
-  const scriptId = customId.substring(3);
-
+  
   try {
-    switch (action) {
-      case "v": {
-        await interaction.deferReply({ ephemeral: true });
-        const script = await prisma.script.findUnique({
-          where: { id: scriptId },
-          include: { _count: { select: { keys: true } } },
-        });
-        if (!script) {
-          await interaction.editReply(epErr("Not Found", "Script not found."));
-          return;
-        }
-        const e = embed()
-          .setTitle(script.name)
-          .addFields(
-            { name: "Version", value: String(script.version || "1.0.0"), inline: true },
-            { name: "Status", value: script.status, inline: true },
-            { name: "Keys", value: String(script._count.keys), inline: true },
-            { name: "Created", value: "<t:" + Math.floor(script.createdAt.getTime() / 1000) + ":R>", inline: true },
-            { name: "ID", value: script.id, inline: true }
-          );
-        await interaction.editReply(epEmbed(e));
-        break;
-      }
-
-      case "r": {
-        const modal = new ModalBuilder()
-          .setCustomId("rm_" + scriptId)
-          .setTitle("Redeem Key");
-        const input = new TextInputBuilder()
-          .setCustomId("key_input")
-          .setLabel("Enter your license key")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true);
-        modal.addComponents(new ActionRowBuilder().addComponents(input));
-        await interaction.showModal(modal);
-        break;
-      }
-
-      case "i": {
-        await interaction.deferReply({ ephemeral: true });
-        const user = await resolveUser(interaction.user.id);
-        if (!user) {
-          await interaction.editReply(epErr("Not Registered", "Use /setup first."));
-          return;
-        }
-        const keys = await prisma.key.findMany({
-          where: { scriptId, userId: user.id },
-          orderBy: { createdAt: "desc" },
-        });
-        if (!keys.length) {
-          await interaction.editReply(epEmbed(embed().setTitle("Key Info").setDescription("No keys found for this script.")));
-          return;
-        }
-        const lines = keys.map(function (k) {
-          const isExpired = k.expiresAt && k.expiresAt.getTime() < Date.now();
-          const status = isExpired ? "Expired" : "Active";
-          const expiry = formatExpiry(k.expiresAt);
-          const hwid = k.hwid ? k.hwid.slice(0, 12) + "..." : "None";
-          const note = k.note ? " | Note: " + k.note : "";
-          return status + " | " + maskKey(k.key) + " | HWID: " + hwid + " | " + expiry + note;
-        });
-        await interaction.editReply(epEmbed(embed().setTitle("Key Info").setDescription(lines.join("\n"))));
-        break;
-      }
-
-      case "l": {
-        await interaction.deferReply({ ephemeral: true });
-        const user = await resolveUser(interaction.user.id);
-        if (!user) {
-          await interaction.editReply(epErr("Not Registered", "Use /setup first."));
-          return;
-        }
-        const keyRecord = await prisma.key.findFirst({
-          where: { scriptId, userId: user.id },
-          orderBy: { createdAt: "desc" },
-        });
-        if (!keyRecord) {
-          await interaction.editReply(epErr("No Key", "No active key found for this script."));
-          return;
-        }
-        const loadstring = 'loadstring(game:HttpGet("' + BASE_URL + "/api/loader?scriptId=" + scriptId + "&key=" + keyRecord.key + '"))()';
-        await interaction.editReply(epEmbed(embed().setTitle("Get Loader").setDescription(loadstring)));
-        break;
-      }
-
-      case "h": {
-        const modal = new ModalBuilder()
-          .setCustomId("hm_" + scriptId)
-          .setTitle("Reset HWID");
-        const input = new TextInputBuilder()
-          .setCustomId("key_input")
-          .setLabel("Enter your key")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true);
-        modal.addComponents(new ActionRowBuilder().addComponents(input));
-        await interaction.showModal(modal);
-        break;
-      }
+    const redirectUri = `${publicBaseUrl()}/api/auth/discord/callback`;
+    const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: CLIENT_ID,
+        client_secret: DISCORD_TOKEN,
+        grant_type: 'authorization_code',
+        code: String(code),
+        redirect_uri: redirectUri
+      })
+    });
+    
+    const tokenData = await tokenResponse.json();
+    if (!tokenResponse.ok) throw new Error('Failed to get token');
+    
+    const userResponse = await fetch('https://discord.com/api/users/@me', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` }
+    });
+    const user = await userResponse.json();
+    
+    // Create or update user
+    let dbUser = db.prepare('SELECT * FROM users WHERE discord_id = ?').get(user.id);
+    if (!dbUser) {
+      const id = `user_${crypto.randomBytes(8).toString('hex')}`;
+      db.prepare(`
+        INSERT INTO users (id, discord_id, username, avatar, access_token, provider)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(id, user.id, user.username, user.avatar || '', tokenData.access_token, 'discord');
+      dbUser = db.prepare('SELECT * FROM users WHERE discord_id = ?').get(user.id);
+    } else {
+      db.prepare('UPDATE users SET username = ?, avatar = ?, access_token = ?, updated_at = CURRENT_TIMESTAMP WHERE discord_id = ?')
+        .run(user.username, user.avatar || '', tokenData.access_token, user.id);
     }
-  } catch (e) {
-    console.error("[" + new Date().toISOString() + "] Button error:", e.message || e);
-    try {
-      if (interaction.deferred || interaction.replied) {
-        await interaction.editReply(epErr("Error", "Something went wrong."));
-      } else {
-        await interaction.reply(epErr("Error", "Something went wrong."));
-      }
-    } catch {}
+    
+    req.session.user = {
+      id: dbUser.id,
+      discord_id: user.id,
+      username: user.username,
+      global_name: user.global_name,
+      avatar: user.avatar
+    };
+    
+    res.redirect('/dashboard');
+  } catch (error) {
+    console.error('Auth error:', error);
+    res.status(500).send('Authentication failed');
   }
-}
+});
 
-// ─── Modal Handler ────────────────────────────────────────────────────────────
+app.get('/logout', (req, res) => {
+  req.session.destroy();
+  res.redirect('/');
+});
 
-async function handleModal(interaction) {
-  const customId = interaction.customId;
-
-  try {
-    if (customId.startsWith("rm_")) {
-      const scriptId = customId.substring(3);
-      const user = await resolveUser(interaction.user.id);
-      if (!user) {
-        await interaction.reply(epErr("Not Registered", "Use /setup first."));
-        return;
-      }
-      const keyVal = interaction.fields.getTextInputValue("key_input").toUpperCase();
-      const keyRecord = await prisma.key.findFirst({
-        where: {
-          scriptId,
-          userId: user.id,
-          OR: [
-            { key: { equals: keyVal, mode: "insensitive" } },
-            { key: { endsWith: keyVal.replace("KARMA-", "") } },
-          ],
-        },
-        include: { script: true },
-      });
-      if (!keyRecord) {
-        await interaction.reply(epErr("Invalid Key", "That key does not exist or is not for this script."));
-        return;
-      }
-      if (keyRecord.expiresAt && keyRecord.expiresAt.getTime() < Date.now()) {
-        await interaction.reply(epErr("Expired", "That key has expired."));
-        return;
-      }
-      await prisma.key.update({ where: { id: keyRecord.id }, data: { lastUsedAt: new Date() } });
-      await interaction.reply(epOk("Key Redeemed", "Key for " + keyRecord.script.name + " is valid and has been activated."));
-    } else if (customId.startsWith("hm_")) {
-      const scriptId = customId.substring(3);
-      const user = await resolveUser(interaction.user.id);
-      if (!user) {
-        await interaction.reply(epErr("Not Registered", "Use /setup first."));
-        return;
-      }
-      const keyVal = interaction.fields.getTextInputValue("key_input").toUpperCase();
-      const keyRecord = await prisma.key.findFirst({
-        where: {
-          scriptId,
-          userId: user.id,
-          OR: [
-            { key: { equals: keyVal, mode: "insensitive" } },
-            { key: { endsWith: keyVal.replace("KARMA-", "") } },
-          ],
-        },
-        include: { script: true },
-      });
-      if (!keyRecord) {
-        await interaction.reply(epErr("Not Found", "No key matching that input."));
-        return;
-      }
-      if (keyRecord.resettable) {
-        const elapsed = Date.now() - keyRecord.resettable.getTime();
-        if (elapsed < COOLDOWN_MS) {
-          await interaction.reply(epErr("Cooldown", "HWID reset on cooldown. Try again in " + timeRemaining(COOLDOWN_MS - elapsed) + "."));
-          return;
-        }
-      }
-      await prisma.key.update({ where: { id: keyRecord.id }, data: { hwid: null, resettable: new Date() } });
-      await interaction.reply(epOk("HWID Reset", "HWID for " + maskKey(keyRecord.key) + " on " + keyRecord.script.name + " has been cleared."));
+// ---------------- Website Routes ----------------
+app.get('/', (req, res) => {
+  if (req.session.user) return res.redirect('/dashboard');
+  
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Karma Protection | Secure Dashboard</title>
+  <style>
+    :root {
+      --bg-color: #09090b;
+      --card-bg: rgba(18, 18, 20, 0.65);
+      --primary: #d4af37;
+      --primary-hover: #e3c94a;
+      --discord: #5865F2;
+      --discord-hover: #4752C4;
+      --text-main: #f8fafc;
+      --text-muted: #9ca3af;
+      --border: rgba(255, 255, 255, 0.08);
+      --glow: rgba(212, 175, 55, 0.15);
     }
-  } catch (e) {
-    console.error("[" + new Date().toISOString() + "] Modal error:", e.message || e);
-    try {
-      await interaction.reply(epErr("Error", "Something went wrong. Try again."));
-    } catch {}
-  }
-}
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg-color);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container { max-width: 1200px; margin: 0 auto; padding: 20px; width: 100%; }
+    
+    .glass-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 40px;
+      max-width: 440px;
+      width: 100%;
+      margin: 0 auto;
+      box-shadow: 0 0 40px rgba(0, 0, 0, 0.8), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+      text-align: center;
+    }
+    .logo { margin-bottom: 20px; }
+    .logo svg { width: 48px; height: 48px; color: var(--primary); }
+    h1 {
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      margin-bottom: 8px;
+    }
+    h1 span { color: var(--primary); }
+    p { color: var(--text-muted); font-size: 14px; margin-bottom: 24px; }
+    
+    .btn-discord {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      padding: 14px 20px;
+      background: var(--discord);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      font-weight: 600;
+      font-size: 15px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      text-decoration: none;
+    }
+    .btn-discord:hover {
+      background: var(--discord-hover);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(88, 101, 242, 0.4);
+    }
+    .btn-discord svg { width: 20px; height: 20px; fill: currentColor; }
+    
+    .footer-links {
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .footer-links button {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 13px;
+      cursor: pointer;
+      transition: color 0.2s;
+    }
+    .footer-links button:hover { color: white; }
+    
+    .hidden { display: none !important; }
+    .fade-in { animation: fadeIn 0.4s ease-out forwards; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    
+    .feature-list { text-align: left; }
+    .feature-list .item {
+      display: flex;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .feature-list .item:last-child { border-bottom: none; }
+    .feature-list .icon { color: var(--primary); flex-shrink: 0; margin-top: 2px; }
+    .feature-list .title { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
+    .feature-list .desc { color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+    
+    .back-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 16px;
+      padding: 10px 20px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text-main);
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+      width: 100%;
+      justify-content: center;
+    }
+    .back-btn:hover { border-color: var(--primary); color: var(--primary); }
+    
+    .terms-content {
+      max-height: 300px;
+      overflow-y: auto;
+      text-align: left;
+      padding-right: 10px;
+    }
+    .terms-content::-webkit-scrollbar { width: 4px; }
+    .terms-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+    .terms-content h4 { color: var(--text-main); margin: 16px 0 6px; font-size: 14px; }
+    .terms-content p { color: var(--text-muted); font-size: 13px; line-height: 1.6; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="login-view" class="glass-card fade-in">
+      <div class="logo">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 7v4m8-4v4"></path>
+        </svg>
+      </div>
+      <h1>Karma <span>Protection</span></h1>
+      <p>Authenticates your hardware and scripts.</p>
+      <a href="/api/auth/discord" class="btn-discord">
+        <svg viewBox="0 0 127.14 96.36">
+          <path d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.7,77.7,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.22h0C129.24,52.84,122.09,29.11,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,46,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.31,60,73.31,53s5-12.74,11.43-12.74S96.1,46,96,53,91.08,65.69,84.69,65.69Z"/>
+        </svg>
+        Login with Discord
+      </a>
+      <div class="footer-links">
+        <button onclick="showView('features')">Features</button>
+        <button onclick="showView('terms')">Terms</button>
+      </div>
+    </div>
 
-// ─── Bot Setup ────────────────────────────────────────────────────────────────
+    <div id="features-view" class="glass-card hidden">
+      <h2 style="text-align:left;font-size:18px;margin-bottom:16px;">Protection Systems</h2>
+      <div class="feature-list">
+        <div class="item">
+          <div class="icon">🔐</div>
+          <div><div class="title">Self-Decrypting Architecture</div><div class="desc">Your script dynamically self-decrypts at runtime using proprietary instructions, making reverse engineering nearly impossible.</div></div>
+        </div>
+        <div class="item">
+          <div class="icon">🔑</div>
+          <div><div class="title">Key & License Manager</div><div class="desc">Generate keys tied to HWID, manage authorized users, and enforce bans from the panel.</div></div>
+        </div>
+        <div class="item">
+          <div class="icon">🛡️</div>
+          <div><div class="title">Anti-Dump Hardening</div><div class="desc">Detects dumping tools mid-run and refuses to reveal your code.</div></div>
+        </div>
+      </div>
+      <button class="back-btn" onclick="showView('login')">← Return to Login</button>
+    </div>
 
+    <div id="terms-view" class="glass-card hidden">
+      <h2 style="text-align:left;font-size:18px;margin-bottom:16px;">Legal Terms</h2>
+      <div class="terms-content">
+        <h4>1. Acceptance of Service</h4>
+        <p>By using our services, you agree to these terms. If you do not agree, do not use the panel.</p>
+        <h4>2. Key and HWID Usage</h4>
+        <p>Licenses are strictly personal and non-transferable. Any attempt at bypassing will result in an immediate HWID Ban.</p>
+        <h4>3. Security & Leaks</h4>
+        <p>In the event of a vulnerability, our team will patch it immediately to ensure script integrity.</p>
+        <h4>4. Intellectual Property</h4>
+        <p>We do not claim ownership of your scripts. Malicious content is strictly prohibited.</p>
+        <h4>5. System Availability</h4>
+        <p>We strive for 99.9% uptime but are not responsible for revenue loss due to maintenance.</p>
+      </div>
+      <button class="back-btn" onclick="showView('login')">← I understand, go back</button>
+    </div>
+  </div>
+
+  <script>
+    function showView(view) {
+      const views = ['login', 'features', 'terms'];
+      views.forEach(id => {
+        const el = document.getElementById(id + '-view');
+        if (id === view) {
+          el.classList.remove('hidden');
+          el.classList.add('fade-in');
+        } else {
+          el.classList.add('hidden');
+          el.classList.remove('fade-in');
+        }
+      });
+    }
+  </script>
+</body>
+</html>`);
+});
+
+app.get('/dashboard', requireAuth, (req, res) => {
+  const user = req.session.user;
+  
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Karma Protection | Dashboard</title>
+  <style>
+    :root {
+      --bg-color: #09090b;
+      --card-bg: rgba(18, 18, 20, 0.65);
+      --primary: #d4af37;
+      --primary-hover: #e3c94a;
+      --discord: #5865F2;
+      --danger: #ef4444;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --text-main: #f8fafc;
+      --text-muted: #9ca3af;
+      --border: rgba(255, 255, 255, 0.08);
+      --glow: rgba(212, 175, 55, 0.15);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg-color);
+      color: var(--text-main);
+      min-height: 100vh;
+    }
+    .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+    
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 24px;
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+    .topbar .brand {
+      font-size: 20px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .topbar .brand span { color: var(--primary); }
+    .topbar .user {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .topbar .avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 2px solid var(--border);
+    }
+    .topbar .username { font-weight: 600; font-size: 14px; }
+    .topbar .logout {
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 13px;
+      transition: color 0.2s;
+    }
+    .topbar .logout:hover { color: var(--danger); }
+    
+    .dashboard {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      gap: 0;
+      min-height: calc(100vh - 72px);
+    }
+    .sidebar {
+      background: var(--card-bg);
+      border-right: 1px solid var(--border);
+      padding: 20px 16px;
+      overflow-y: auto;
+    }
+    .sidebar .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      border-radius: 10px;
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-bottom: 4px;
+    }
+    .sidebar .nav-item:hover { background: rgba(255,255,255,0.05); color: white; }
+    .sidebar .nav-item.active {
+      background: var(--glow);
+      color: var(--primary);
+    }
+    .sidebar .nav-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      padding: 12px 14px 6px;
+      font-weight: 700;
+    }
+    
+    .main-content { padding: 24px 32px; overflow-y: auto; }
+    
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+    .card h2 { font-size: 20px; font-weight: 800; margin-bottom: 4px; }
+    .card .sub { color: var(--text-muted); font-size: 14px; margin-bottom: 16px; }
+    
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .stat {
+      background: rgba(0,0,0,0.2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
+    }
+    .stat .num { font-size: 28px; font-weight: 900; color: var(--primary); }
+    .stat .label { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+    
+    input, textarea, select {
+      width: 100%;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      padding: 12px 16px;
+      border-radius: 10px;
+      margin-bottom: 14px;
+      font-family: 'Inter', sans-serif;
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+    input:focus, textarea:focus, select:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--glow);
+    }
+    textarea { min-height: 120px; font-family: monospace; resize: vertical; }
+    select { appearance: none; background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%239ca3af%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 16px top 50%; background-size: 12px auto; }
+    
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: none;
+    }
+    .btn-primary { background: var(--primary); color: #000; box-shadow: 0 4px 12px rgba(212,175,55,0.3); }
+    .btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); }
+    .btn-danger { background: rgba(239,68,68,0.1); color: var(--danger); border: 1px solid rgba(239,68,68,0.2); }
+    .btn-danger:hover { background: rgba(239,68,68,0.2); }
+    .btn-success { background: rgba(16,185,129,0.1); color: var(--success); border: 1px solid rgba(16,185,129,0.2); }
+    .btn-success:hover { background: rgba(16,185,129,0.2); }
+    .btn-outline { background: rgba(0,0,0,0.2); border: 1px solid var(--border); color: var(--text-main); }
+    .btn-outline:hover { border-color: var(--primary); color: var(--primary); }
+    
+    .checkbox-container {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: rgba(0,0,0,0.2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 13px;
+      transition: all 0.2s;
+      width: fit-content;
+    }
+    .checkbox-container:hover { border-color: var(--warning); color: var(--warning); }
+    .checkbox-container input { width: 16px; height: 16px; cursor: pointer; accent-color: var(--warning); margin: 0; }
+    
+    .scripts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .script-card {
+      background: rgba(0,0,0,0.2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      transition: all 0.3s;
+    }
+    .script-card:hover { border-color: rgba(255,255,255,0.15); transform: translateY(-2px); }
+    .script-card .title { font-weight: 600; font-size: 15px; margin-bottom: 8px; }
+    .script-card .meta { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }
+    .script-card .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .script-card .actions .btn { flex: 1; padding: 8px 12px; font-size: 12px; }
+    
+    .badge {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-success { background: rgba(16,185,129,0.2); color: var(--success); }
+    .badge-danger { background: rgba(239,68,68,0.2); color: var(--danger); }
+    .badge-warning { background: rgba(245,158,11,0.2); color: var(--warning); }
+    .badge-primary { background: rgba(212,175,55,0.2); color: var(--primary); }
+    
+    .view-section { display: none; }
+    .view-section.active { display: block; animation: fadeIn 0.3s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    
+    .actions-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+    
+    @media (max-width: 768px) {
+      .dashboard { grid-template-columns: 1fr; }
+      .sidebar { display: none; position: fixed; top: 0; left: 0; width: 260px; height: 100vh; z-index: 100; }
+      .sidebar.open { display: block; }
+      .main-content { padding: 16px; }
+      .stats-grid { grid-template-columns: 1fr 1fr; }
+      .scripts-grid { grid-template-columns: 1fr; }
+      .topbar .brand { font-size: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">⚡ Karma <span>Protection</span></div>
+    <div class="user">
+      <span class="username">${escapeHtml(user.global_name || user.username)}</span>
+      <img class="avatar" src="${user.avatar ? 'https://cdn.discordapp.com/avatars/' + user.discord_id + '/' + user.avatar + '.png?size=128' : 'https://cdn.discordapp.com/embed/avatars/0.png'}" alt="Avatar">
+      <span class="logout" onclick="window.location.href='/logout'">Logout</span>
+    </div>
+  </header>
+  
+  <div class="dashboard">
+    <aside class="sidebar" id="sidebar">
+      <div class="nav-label">Navigation</div>
+      <div class="nav-item active" onclick="switchView('overview', this)">📊 Overview</div>
+      <div class="nav-item" onclick="switchView('scripts', this)">📄 Scripts</div>
+      <div class="nav-item" onclick="switchView('panels', this)">📋 Panels</div>
+      <div class="nav-item" onclick="switchView('keys', this)">🔑 Keys</div>
+      <div class="nav-item" onclick="switchView('hwids', this)">🚫 HWID Bans</div>
+    </aside>
+    
+    <main class="main-content" id="mainContent">
+      <!-- Overview -->
+      <div id="view-overview" class="view-section active">
+        <div class="card">
+          <h2>Welcome, ${escapeHtml(user.global_name || user.username)}</h2>
+          <p class="sub">Manage your scripts, panels, and keys from one place.</p>
+          <div class="stats-grid" id="statsGrid">
+            <div class="stat"><div class="num" id="statScripts">0</div><div class="label">Scripts</div></div>
+            <div class="stat"><div class="num" id="statPanels">0</div><div class="label">Panels</div></div>
+            <div class="stat"><div class="num" id="statKeys">0</div><div class="label">Keys</div></div>
+            <div class="stat"><div class="num" id="statBanned">0</div><div class="label">Banned HWIDs</div></div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Scripts -->
+      <div id="view-scripts" class="view-section">
+        <div class="card">
+          <h2>Your Scripts</h2>
+          <p class="sub">Create and manage your protected scripts.</p>
+          <div style="margin-bottom:16px;display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
+            <input type="text" id="scriptName" placeholder="Script name" style="flex:1;min-width:200px;margin:0;">
+            <label class="checkbox-container">
+              <input type="checkbox" id="ffaMode"> FFA Mode
+            </label>
+            <label class="checkbox-container">
+              <input type="checkbox" id="compressMode"> Compress
+            </label>
+            <button class="btn btn-primary" onclick="createScript()">+ Create</button>
+          </div>
+          <textarea id="scriptCode" rows="8" placeholder="-- Paste your Lua code here..."></textarea>
+        </div>
+        <div id="scriptsList" class="scripts-grid"></div>
+      </div>
+      
+      <!-- Panels -->
+      <div id="view-panels" class="view-section">
+        <div class="card">
+          <h2>Discord Panels</h2>
+          <p class="sub">Create panels to send to your Discord server.</p>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <input type="text" id="panelName" placeholder="Panel name">
+            <input type="text" id="panelChannel" placeholder="Discord Channel ID">
+          </div>
+          <textarea id="panelDesc" rows="3" placeholder="Panel description..."></textarea>
+          <select id="panelScript"><option value="">Select script...</option></select>
+          <input type="number" id="panelCooldown" placeholder="HWID cooldown (seconds)" value="180">
+          <button class="btn btn-primary" onclick="createPanel()">+ Create Panel</button>
+        </div>
+        <div id="panelsList" class="scripts-grid"></div>
+      </div>
+      
+      <!-- Keys -->
+      <div id="view-keys" class="view-section">
+        <div class="card">
+          <h2>Generate Keys</h2>
+          <p class="sub">Generate license keys for your panels.</p>
+          <select id="keyPanel"><option value="">Select panel...</option></select>
+          <input type="number" id="keyDuration" placeholder="Duration (hours, 0 = permanent)" value="0">
+          <input type="text" id="keyNote" placeholder="Note (optional)">
+          <div class="actions-row">
+            <button class="btn btn-primary" onclick="generateKey()">Generate Key</button>
+            <button class="btn btn-outline" onclick="addTimeAll()">+ Add Time to All</button>
+          </div>
+        </div>
+        <div id="keysList" class="scripts-grid"></div>
+      </div>
+      
+      <!-- HWIDs -->
+      <div id="view-hwids" class="view-section">
+        <div class="card">
+          <h2>Ban HWID</h2>
+          <p class="sub">Ban a hardware ID from accessing your scripts.</p>
+          <div style="display:flex;gap:12px;">
+            <input type="text" id="banHwidInput" placeholder="Enter HWID to ban" style="flex:1;margin:0;">
+            <button class="btn btn-danger" onclick="banHwid()">Ban</button>
+          </div>
+        </div>
+        <div id="hwidsList" class="scripts-grid"></div>
+      </div>
+    </main>
+  </div>
+  
+  <script>
+    let currentData = { scripts: [], panels: [], keys: [], bannedHWIDs: [] };
+    let serverTime = Date.now();
+    
+    function getHeaders() {
+      return { 'Content-Type': 'application/json' };
+    }
+    
+    async function loadData() {
+      try {
+        const res = await fetch('/api/data');
+        const data = await res.json();
+        if (data.error) return;
+        
+        currentData = data;
+        serverTime = data.serverTime || Date.now();
+        renderAll();
+      } catch (e) { console.error(e); }
+    }
+    
+    function renderAll() {
+      renderStats();
+      renderScripts();
+      renderPanels();
+      renderKeys();
+      renderHwids();
+      updateSelects();
+    }
+    
+    function renderStats() {
+      document.getElementById('statScripts').textContent = currentData.scripts.length;
+      document.getElementById('statPanels').textContent = currentData.panels.length;
+      document.getElementById('statKeys').textContent = currentData.keys.length;
+      document.getElementById('statBanned').textContent = currentData.bannedHWIDs.length;
+    }
+    
+    function renderScripts() {
+      const container = document.getElementById('scriptsList');
+      if (currentData.scripts.length === 0) {
+        container.innerHTML = '<div style="grid-column:1/-1;padding:30px;text-align:center;color:var(--text-muted);background:rgba(0,0,0,0.2);border-radius:12px;border:1px dashed var(--border);">No scripts yet. Create one above.</div>';
+        return;
+      }
+      container.innerHTML = currentData.scripts.map(s => `
+        <div class="script-card">
+          <div class="title">${escapeHtml(s.name)}</div>
+          <div class="meta">
+            <span class="badge ${s.status === 'active' ? 'badge-success' : 'badge-danger'}">${s.status === 'active' ? 'Active' : 'Disabled'}</span>
+            ${s.ffa_mode ? '<span class="badge badge-warning">FFA</span>' : ''}
+            ${s.compress_mode ? '<span class="badge badge-primary">Compressed</span>' : ''}
+            <span style="margin-left:8px;">${new Date(s.created_at).toLocaleDateString()}</span>
+          </div>
+          <div class="actions">
+            <button class="btn btn-outline" onclick="toggleScript('${s.id}')">${s.status === 'active' ? 'Disable' : 'Enable'}</button>
+            <button class="btn btn-outline" onclick="toggleFfa('${s.id}')">${s.ffa_mode ? 'Disable FFA' : 'Enable FFA'}</button>
+            <button class="btn btn-danger" onclick="deleteScript('${s.id}')">Delete</button>
+          </div>
+        </div>
+      `).join('');
+    }
+    
+    function renderPanels() {
+      const container = document.getElementById('panelsList');
+      if (currentData.panels.length === 0) {
+        container.innerHTML = '<div style="grid-column:1/-1;padding:30px;text-align:center;color:var(--text-muted);background:rgba(0,0,0,0.2);border-radius:12px;border:1px dashed var(--border);">No panels yet. Create one above.</div>';
+        return;
+      }
+      container.innerHTML = currentData.panels.map(p => `
+        <div class="script-card">
+          <div class="title">${escapeHtml(p.name)}</div>
+          <div class="meta">${escapeHtml(p.description || 'No description')}</div>
+          <div class="actions">
+            <button class="btn btn-success" onclick="sendPanel('${p.id}')">Send to Discord</button>
+            <button class="btn btn-danger" onclick="deletePanel('${p.id}')">Delete</button>
+          </div>
+        </div>
+      `).join('');
+    }
+    
+    function renderKeys() {
+      const container = document.getElementById('keysList');
+      if (currentData.keys.length === 0) {
+        container.innerHTML = '<div style="grid-column:1/-1;padding:30px;text-align:center;color:var(--text-muted);background:rgba(0,0,0,0.2);border-radius:12px;border:1px dashed var(--border);">No keys generated yet.</div>';
+        return;
+      }
+      container.innerHTML = currentData.keys.map(k => {
+        const isExpired = k.expires_at && new Date(k.expires_at).getTime() < serverTime;
+        let status = 'Active';
+        let badgeClass = 'badge-success';
+        if (isExpired) { status = 'Expired'; badgeClass = 'badge-danger'; }
+        else if (k.hwid) { status = 'HWID Locked'; badgeClass = 'badge-warning'; }
+        
+        return `
+          <div class="script-card">
+            <div class="title" style="font-family:monospace;font-size:13px;">${escapeHtml(k.key)}</div>
+            <div class="meta">
+              <span class="badge ${badgeClass}">${status}</span>
+              ${k.note ? `<span style="margin-left:8px;">${escapeHtml(k.note)}</span>` : ''}
+            </div>
+            <div class="actions">
+              <button class="btn btn-danger" onclick="deleteKey('${k.key}')">Delete</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+    
+    function renderHwids() {
+      const container = document.getElementById('hwidsList');
+      if (currentData.bannedHWIDs.length === 0) {
+        container.innerHTML = '<div style="grid-column:1/-1;padding:30px;text-align:center;color:var(--text-muted);background:rgba(0,0,0,0.2);border-radius:12px;border:1px dashed var(--border);">No banned HWIDs.</div>';
+        return;
+      }
+      container.innerHTML = currentData.bannedHWIDs.map(h => `
+        <div class="script-card">
+          <div class="title" style="font-family:monospace;font-size:13px;">${escapeHtml(h.hwid)}</div>
+          <div class="meta">Banned ${new Date(h.created_at).toLocaleDateString()}</div>
+          <div class="actions">
+            <button class="btn btn-outline" onclick="unbanHwid('${h.hwid}')">Unban</button>
+          </div>
+        </div>
+      `).join('');
+    }
+    
+    function updateSelects() {
+      const panelScript = document.getElementById('panelScript');
+      panelScript.innerHTML = '<option value="">Select script...</option>';
+      currentData.scripts.forEach(s => {
+        panelScript.innerHTML += `<option value="${s.id}">${escapeHtml(s.name)}</option>`;
+      });
+      
+      const keyPanel = document.getElementById('keyPanel');
+      keyPanel.innerHTML = '<option value="">Select panel...</option>';
+      currentData.panels.forEach(p => {
+        keyPanel.innerHTML += `<option value="${p.id}">${escapeHtml(p.name)}</option>`;
+      });
+    }
+    
+    function switchView(view, el) {
+      document.querySelectorAll('.view-section').forEach(v => v.classList.remove('active'));
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      document.getElementById('view-' + view).classList.add('active');
+      if (el) el.classList.add('active');
+    }
+    
+    // Script functions
+    async function createScript() {
+      const name = document.getElementById('scriptName').value.trim();
+      const code = document.getElementById('scriptCode').value;
+      const compressMode = document.getElementById('compressMode').checked;
+      
+      if (!name || !code) return alert('Please enter a name and code.');
+      
+      await fetch('/api/create-script', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ name, code, compressMode })
+      });
+      
+      document.getElementById('scriptName').value = '';
+      document.getElementById('scriptCode').value = '';
+      document.getElementById('ffaMode').checked = false;
+      document.getElementById('compressMode').checked = false;
+      loadData();
+    }
+    
+    async function toggleScript(id) {
+      await fetch('/api/scripts/' + id + '/toggle', { method: 'PUT', headers: getHeaders() });
+      loadData();
+    }
+    
+    async function toggleFfa(id) {
+      await fetch('/api/scripts/' + id + '/ffa', { method: 'PUT', headers: getHeaders() });
+      loadData();
+    }
+    
+    async function deleteScript(id) {
+      if (!confirm('Delete this script?')) return;
+      await fetch('/api/delete-script', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ id })
+      });
+      loadData();
+    }
+    
+    // Panel functions
+    async function createPanel() {
+      const name = document.getElementById('panelName').value.trim();
+      const description = document.getElementById('panelDesc').value;
+      const channelId = document.getElementById('panelChannel').value.trim();
+      const scriptId = document.getElementById('panelScript').value;
+      const hwidCooldown = parseInt(document.getElementById('panelCooldown').value) || 180;
+      
+      if (!name || !channelId || !scriptId) return alert('Please fill in all required fields.');
+      
+      await fetch('/api/create-panel', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ name, description, channelId, scriptId, hwidCooldown })
+      });
+      
+      document.getElementById('panelName').value = '';
+      document.getElementById('panelDesc').value = '';
+      document.getElementById('panelChannel').value = '';
+      document.getElementById('panelCooldown').value = '180';
+      loadData();
+    }
+    
+    async function sendPanel(id) {
+      await fetch('/api/send-panel', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ panelId: id })
+      });
+      alert('Panel sent to Discord!');
+    }
+    
+    async function deletePanel(id) {
+      if (!confirm('Delete this panel?')) return;
+      await fetch('/api/delete-panel', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ id })
+      });
+      loadData();
+    }
+    
+    // Key functions
+    async function generateKey() {
+      const panelId = document.getElementById('keyPanel').value;
+      const durationHours = parseInt(document.getElementById('keyDuration').value) || 0;
+      const note = document.getElementById('keyNote').value.trim();
+      
+      if (!panelId) return alert('Please select a panel.');
+      
+      await fetch('/api/generate-key', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ panelId, durationHours, note })
+      });
+      
+      document.getElementById('keyNote').value = '';
+      loadData();
+    }
+    
+    async function deleteKey(key) {
+      if (!confirm('Delete this key?')) return;
+      await fetch('/api/delete-key', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ key })
+      });
+      loadData();
+    }
+    
+    async function addTimeAll() {
+      const hours = prompt('How many hours to add to all keys?');
+      if (!hours || isNaN(hours)) return;
+      await fetch('/api/add-time-all', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ hours: parseInt(hours) })
+      });
+      loadData();
+    }
+    
+    // HWID functions
+    async function banHwid() {
+      const hwid = document.getElementById('banHwidInput').value.trim();
+      if (!hwid) return alert('Enter an HWID to ban.');
+      await fetch('/api/ban-hwid', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ hwid })
+      });
+      document.getElementById('banHwidInput').value = '';
+      loadData();
+    }
+    
+    async function unbanHwid(hwid) {
+      if (!confirm('Unban this HWID?')) return;
+      await fetch('/api/unban-hwid', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ hwid })
+      });
+      loadData();
+    }
+    
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+    
+    // Load data on page load
+    loadData();
+  </script>
+</body>
+</html>`);
+});
+
+app.get('/health', (req, res) => {
+  res.json({ ok: true, name: 'Karma Protection v6.3' });
+});
+
+// ---------------- Discord Bot ----------------
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages,
   ],
   partials: [Partials.Channel, Partials.Message],
   presence: {
     status: PresenceUpdateStatus.Online,
-    activities: [{ name: "/help | Karma Hosting", type: ActivityType.Watching }],
+    activities: [{ name: '/help | Karma Hosting', type: ActivityType.Watching }],
   },
 });
 
-client.on("ready", function () {
-  console.log(
-    "[" + new Date().toISOString() + "] Karma Bot online as " +
-    client.user.tag + " | Prefix: " + PREFIX + " | Commands: 13"
-  );
+client.once('ready', () => {
+  console.log(`Karma Bot online as ${client.user.tag}`);
 });
 
-// ─── Message Commands ─────────────────────────────────────────────────────────
-
-client.on("messageCreate", async (msg) => {
+// ---------------- Message Commands ----------------
+client.on('messageCreate', async (msg) => {
   if (msg.author.bot) return;
   if (!msg.content.startsWith(PREFIX)) return;
 
@@ -352,385 +1381,447 @@ client.on("messageCreate", async (msg) => {
   const args = parts;
 
   try {
-    switch (cmd) {
+    // Helper functions
+    const user = db.prepare('SELECT * FROM users WHERE discord_id = ?').get(msg.author.id);
+    
+    if (cmd === 'help') {
+      const helpEmbed = new EmbedBuilder()
+        .setColor(BRAND_COLOR)
+        .setTitle('Karma Hosting - Commands')
+        .setDescription([
+          '**Commands**',
+          `${PREFIX}setup - Create account or view info`,
+          `${PREFIX}panelsetup <script> - Spawn panel for a script`,
+          `${PREFIX}scripts - List your scripts`,
+          `${PREFIX}keys <script> - List keys for a script`,
+          `${PREFIX}createkey <script> [note] [hours] - Generate a key`,
+          `${PREFIX}generate <id> <hours> [note] - Generate by script ID`,
+          `${PREFIX}revoke <key> - Revoke a key`,
+          `${PREFIX}reset-hwid <key> - Reset HWID (24h cooldown)`,
+          `${PREFIX}ban <hwid> - Ban a HWID (owner only)`,
+          `${PREFIX}unban <hwid> - Unban a HWID (owner only)`
+        ].join('\n'))
+        .setFooter({ text: 'Karma Hosting' })
+        .setTimestamp();
+      
+      try {
+        await msg.author.send({ embeds: [helpEmbed] });
+        await msg.reply({ embeds: [new EmbedBuilder().setColor(BRAND_COLOR).setTitle('✅ Help Sent').setDescription('Check your DMs.').setColor(0x22c55e)] });
+      } catch {
+        await msg.reply({ embeds: [helpEmbed] });
+      }
+      return;
+    }
 
-      /* /panelsetup <script> */
-      case "panelsetup": {
-        const user = await resolveUser(msg.author.id);
-        if (!user) {
-          await safeSend(msg, { embeds: [err("Not Registered", "Use /setup first.")] });
-          return;
+    if (cmd === 'setup') {
+      let dbUser = user;
+      if (!dbUser) {
+        const id = `user_${crypto.randomBytes(8).toString('hex')}`;
+        db.prepare(`
+          INSERT INTO users (id, discord_id, username, avatar, provider)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(id, msg.author.id, msg.author.username, msg.author.displayAvatarURL() || '', 'discord');
+        dbUser = db.prepare('SELECT * FROM users WHERE discord_id = ?').get(msg.author.id);
+      }
+      
+      const scriptCount = db.prepare('SELECT COUNT(*) as count FROM scripts WHERE user_id = ?').get(dbUser.id).count;
+      const keyCount = db.prepare('SELECT COUNT(*) as count FROM keys WHERE user_id = ?').get(dbUser.id).count;
+      
+      const embed = new EmbedBuilder()
+        .setColor(BRAND_COLOR)
+        .setTitle('Karma Hosting - Setup')
+        .setDescription(`Account ${dbUser ? 'loaded' : 'created'}!`)
+        .addFields(
+          { name: 'Scripts', value: String(scriptCount), inline: true },
+          { name: 'Keys', value: String(keyCount), inline: true }
+        )
+        .setFooter({ text: 'Karma Hosting' })
+        .setTimestamp();
+      
+      await msg.reply({ embeds: [embed] });
+      return;
+    }
+
+    if (cmd === 'scripts') {
+      if (!user) return msg.reply('Use /setup first.');
+      
+      const scripts = db.prepare('SELECT * FROM scripts WHERE user_id = ? ORDER BY created_at DESC').all(user.id);
+      if (!scripts.length) {
+        return msg.reply('No scripts found.');
+      }
+      
+      const lines = scripts.map((s, i) => 
+        `${i+1}. ${s.name} - v${s.version || '1.0.0'} - ${s.status === 'active' ? '✅ Active' : '⛔ Disabled'} - ID: ${s.id}`
+      );
+      
+      const embed = new EmbedBuilder()
+        .setColor(BRAND_COLOR)
+        .setTitle(`Your Scripts (${scripts.length})`)
+        .setDescription(lines.join('\n'))
+        .setFooter({ text: 'Karma Hosting' })
+        .setTimestamp();
+      
+      await msg.reply({ embeds: [embed] });
+      return;
+    }
+
+    if (cmd === 'createkey') {
+      if (!user) return msg.reply('Use /setup first.');
+      
+      const scriptName = args[0];
+      if (!scriptName) return msg.reply('Usage: /createkey <script> [note] [hours]');
+      
+      let note = null;
+      let hours = null;
+      if (args.length >= 2) {
+        const lastArg = args[args.length - 1];
+        const parsed = parseInt(lastArg);
+        if (!isNaN(parsed) && String(parsed) === lastArg) {
+          hours = parsed;
+          if (args.length > 2) note = args.slice(1, -1).join(' ');
+        } else {
+          note = args.slice(1).join(' ');
         }
-        const scriptName = args.join(" ");
-        if (!scriptName) {
-          await safeSend(msg, { embeds: [err("Missing Argument", "Usage: /panelsetup <script name>")] });
-          return;
+      }
+      
+      const script = db.prepare('SELECT * FROM scripts WHERE user_id = ? AND name = ?').get(user.id, scriptName);
+      if (!script) return msg.reply(`No script found matching "${scriptName}"`);
+      
+      const key = generateKey();
+      const expiresAt = hours > 0 ? addHours(hours) : null;
+      const id = makeId('key');
+      
+      db.prepare(`
+        INSERT INTO keys (id, script_id, user_id, key, note, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(id, script.id, user.id, key, note || '', expiresAt);
+      
+      const embed = new EmbedBuilder()
+        .setColor(BRAND_COLOR)
+        .setTitle('✅ Key Generated')
+        .setDescription([
+          `**Script:** ${script.name}`,
+          `**Key:** \`${key}\``,
+          note ? `**Note:** ${note}` : null,
+          hours > 0 ? `**Expires:** ${formatExpiry(expiresAt)}` : '**Duration:** Permanent'
+        ].filter(Boolean).join('\n'))
+        .setFooter({ text: 'Karma Hosting' })
+        .setTimestamp();
+      
+      try {
+        await msg.author.send({ embeds: [embed] });
+        await msg.reply(`Key for ${script.name} sent to your DMs.`);
+      } catch {
+        await msg.reply({ embeds: [embed] });
+      }
+      return;
+    }
+
+    if (cmd === 'revoke') {
+      if (!user) return msg.reply('Use /setup first.');
+      
+      const rawKey = args[0];
+      if (!rawKey) return msg.reply('Usage: /revoke <key>');
+      
+      const keyRecord = db.prepare('SELECT * FROM keys WHERE key = ? AND user_id = ?').get(rawKey, user.id);
+      if (!keyRecord) return msg.reply('Key not found.');
+      
+      db.prepare('DELETE FROM keys WHERE key = ? AND user_id = ?').run(rawKey, user.id);
+      await msg.reply(`✅ Key ${maskKey(rawKey)} revoked.`);
+      return;
+    }
+
+    if (cmd === 'reset-hwid') {
+      if (!user) return msg.reply('Use /setup first.');
+      
+      const rawKey = args[0];
+      if (!rawKey) return msg.reply('Usage: /reset-hwid <key>');
+      
+      const keyRecord = db.prepare('SELECT * FROM keys WHERE key = ? AND user_id = ?').get(rawKey, user.id);
+      if (!keyRecord) return msg.reply('Key not found.');
+      
+      if (keyRecord.resettable) {
+        const elapsed = Date.now() - new Date(keyRecord.resettable).getTime();
+        if (elapsed < COOLDOWN_MS) {
+          return msg.reply(`⏳ Cooldown active. Try again in ${timeRemaining(COOLDOWN_MS - elapsed)}.`);
         }
-        const script = await findScript(user.id, scriptName);
-        if (!script) {
-          await safeSend(msg, { embeds: [err("Not Found", "No script found matching that name.")] });
-          return;
-        }
-        const panelEmbed = new EmbedBuilder()
+      }
+      
+      db.prepare('UPDATE keys SET hwid = NULL, resettable = CURRENT_TIMESTAMP WHERE key = ?').run(rawKey);
+      await msg.reply(`✅ HWID reset for ${maskKey(rawKey)}.`);
+      return;
+    }
+
+    if (cmd === 'panelsetup') {
+      if (!user) return msg.reply('Use /setup first.');
+      
+      const scriptName = args.join(' ');
+      if (!scriptName) return msg.reply('Usage: /panelsetup <script name>');
+      
+      const script = db.prepare('SELECT * FROM scripts WHERE user_id = ? AND name = ?').get(user.id, scriptName);
+      if (!script) return msg.reply(`No script found matching "${scriptName}"`);
+      
+      const panelEmbed = new EmbedBuilder()
+        .setColor(BRAND_COLOR)
+        .setTitle(script.name)
+        .setDescription('Use the buttons below to manage your key.')
+        .setFooter({ text: 'Karma Hosting' })
+        .setTimestamp();
+      
+      const row1 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`pv_${script.id}`).setLabel('View Script').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`pr_${script.id}`).setLabel('Redeem Key').setStyle(ButtonStyle.Success)
+      );
+      const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`pi_${script.id}`).setLabel('Key Info').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`pl_${script.id}`).setLabel('Get Loader').setStyle(ButtonStyle.Secondary)
+      );
+      const row3 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`ph_${script.id}`).setLabel('Reset HWID').setStyle(ButtonStyle.Danger)
+      );
+      
+      await msg.reply({ embeds: [panelEmbed], components: [row1, row2, row3] });
+      return;
+    }
+
+    // Owner only commands
+    if (cmd === 'ban' && msg.author.id === OWNER_ID) {
+      const hwid = args[0];
+      if (!hwid) return msg.reply('Usage: /ban <hwid>');
+      db.prepare('INSERT OR REPLACE INTO banned_hwids (hwid, banned_by) VALUES (?, ?)').run(hwid, msg.author.id);
+      await msg.reply(`✅ HWID ${hwid} banned.`);
+      return;
+    }
+
+    if (cmd === 'unban' && msg.author.id === OWNER_ID) {
+      const hwid = args[0];
+      if (!hwid) return msg.reply('Usage: /unban <hwid>');
+      db.prepare('DELETE FROM banned_hwids WHERE hwid = ?').run(hwid);
+      await msg.reply(`✅ HWID ${hwid} unbanned.`);
+      return;
+    }
+
+  } catch (e) {
+    console.error('Command error:', e);
+    await msg.reply('❌ Something went wrong.');
+  }
+});
+
+// ---------------- Button Handler ----------------
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isButton()) return;
+  
+  const customId = interaction.customId;
+  const action = customId[1];
+  const scriptId = customId.substring(3);
+  
+  try {
+    const user = db.prepare('SELECT * FROM users WHERE discord_id = ?').get(interaction.user.id);
+    if (!user) {
+      return interaction.reply({ content: 'Use /setup first.', ephemeral: true });
+    }
+    
+    const script = db.prepare('SELECT * FROM scripts WHERE id = ? AND user_id = ?').get(scriptId, user.id);
+    if (!script) {
+      return interaction.reply({ content: 'Script not found.', ephemeral: true });
+    }
+    
+    switch (action) {
+      case 'v': {
+        const keyCount = db.prepare('SELECT COUNT(*) as count FROM keys WHERE script_id = ? AND user_id = ?').get(scriptId, user.id).count;
+        const embed = new EmbedBuilder()
           .setColor(BRAND_COLOR)
           .setTitle(script.name)
-          .setDescription("Use the buttons below to manage your key.")
-          .setFooter({ text: "Karma Hosting | v1" })
+          .addFields(
+            { name: 'Version', value: script.version || '1.0.0', inline: true },
+            { name: 'Status', value: script.status === 'active' ? '✅ Active' : '⛔ Disabled', inline: true },
+            { name: 'Keys', value: String(keyCount), inline: true },
+            { name: 'ID', value: script.id, inline: true }
+          )
+          .setFooter({ text: 'Karma Hosting' })
           .setTimestamp();
-        const row1 = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId("pv_" + script.id).setLabel("View Script").setStyle(ButtonStyle.Primary).setEmoji("\uD83D\uDCC4"),
-          new ButtonBuilder().setCustomId("pr_" + script.id).setLabel("Redeem Key").setStyle(ButtonStyle.Success).setEmoji("\uD83D\uDD11")
-        );
-        const row2 = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId("pi_" + script.id).setLabel("Key Info").setStyle(ButtonStyle.Secondary).setEmoji("\uD83D\uDCCA"),
-          new ButtonBuilder().setCustomId("pl_" + script.id).setLabel("Get Loader").setStyle(ButtonStyle.Secondary).setEmoji("\uD83D\uDD17")
-        );
-        const row3 = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId("ph_" + script.id).setLabel("Reset HWID").setStyle(ButtonStyle.Danger).setEmoji("\u2699\uFE0F")
-        );
-        await msg.reply({ embeds: [panelEmbed], components: [row1, row2, row3] });
+        await interaction.reply({ embeds: [embed], ephemeral: true });
         break;
       }
-
-      /* /setup */
-      case "setup": {
-        let user = await resolveUser(msg.author.id);
-        const isNew = !user;
-        if (!user) {
-          user = await prisma.user.create({
-            data: {
-              discordId: msg.author.id,
-              username: msg.author.username,
-              avatar: msg.author.displayAvatarURL() || null,
-              accessToken: "setup",
-              provider: "discord",
-            },
-          });
-        }
-        const scriptCount = await prisma.script.count({ where: { userId: user.id } });
-        const keyCount = await prisma.key.count({ where: { userId: user.id } });
-        const info = (isNew ? "Account created!" : "Welcome back!") + "\n\n" + "Scripts: " + scriptCount + "\n" + "Keys: " + keyCount;
-        await safeSend(msg, { embeds: [ok("Karma Hosting - Setup", info)] });
+      
+      case 'r': {
+        const modal = new ModalBuilder()
+          .setCustomId(`rm_${scriptId}`)
+          .setTitle('Redeem Key');
+        const input = new TextInputBuilder()
+          .setCustomId('key_input')
+          .setLabel('Enter your license key')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        await interaction.showModal(modal);
         break;
       }
-
-      /* /help */
-      case "help": {
-        const helpText =
-          "**Commands**\n" +
-          "/setup - Create account or view info\n" +
-          "/panelsetup <script> - Spawn panel for a script\n" +
-          "/scripts - List your scripts\n" +
-          "/keys <script> - List keys for a script\n" +
-          "/createkey <script> [note] [hours] - Generate a key\n" +
-          "/generate <id> <hours> [note] - Generate by script ID\n" +
-          "/revoke <key> - Revoke a key\n" +
-          "/reset-hwid <key> - Reset HWID (24h cooldown)\n" +
-          "/ban <hwid> - Ban a HWID (owner only)\n" +
-          "/unban <hwid> - Unban a HWID (owner only)";
-        const helpEmbed = embed().setTitle("Karma Hosting - Commands").setDescription(helpText);
-        const dmSent = await safeDm(msg, { embeds: [helpEmbed] });
-        if (dmSent) {
-          await safeSend(msg, { embeds: [ok("Help Sent", "Check your DMs.")] });
-        } else {
-          await safeSend(msg, { embeds: [helpEmbed] });
-        }
-        break;
-      }
-
-      /* /scripts */
-      case "scripts": {
-        const user = await resolveUser(msg.author.id);
-        if (!user) {
-          await safeSend(msg, { embeds: [err("Not Registered", "Use /setup first.")] });
-          return;
-        }
-        const scripts = await prisma.script.findMany({
-          where: { userId: user.id },
-          include: { _count: { select: { keys: true } } },
-          orderBy: { createdAt: "desc" },
-        });
-        if (!scripts.length) {
-          await safeSend(msg, { embeds: [embed().setTitle("Your Scripts (0)").setDescription("No scripts found.")] });
-          return;
-        }
-        const lines = scripts.map(function (s, idx) {
-          const status = s.status === "active" ? "Active" : "Inactive";
-          return (idx + 1) + ". " + s.name + " - v" + s.version + " - " + s._count.keys + " keys - " + status + " - ID: " + s.id;
-        });
-        await safeSend(msg, { embeds: [embed().setTitle("Your Scripts (" + scripts.length + ")").setDescription(lines.join("\n"))] });
-        break;
-      }
-
-      /* /keys <script> */
-      case "keys": {
-        const user = await resolveUser(msg.author.id);
-        if (!user) {
-          await safeSend(msg, { embeds: [err("Not Registered", "Use /setup first.")] });
-          return;
-        }
-        const scriptName = args.join(" ");
-        if (!scriptName) {
-          await safeSend(msg, { embeds: [err("Missing Argument", "Usage: /keys <script name>")] });
-          return;
-        }
-        const script = await findScript(user.id, scriptName);
-        if (!script) {
-          await safeSend(msg, { embeds: [err("Not Found", "No script found matching that name.")] });
-          return;
-        }
-        const keys = await prisma.key.findMany({
-          where: { scriptId: script.id, userId: user.id },
-          orderBy: { createdAt: "desc" },
-        });
+      
+      case 'i': {
+        const keys = db.prepare('SELECT * FROM keys WHERE script_id = ? AND user_id = ? ORDER BY created_at DESC').all(scriptId, user.id);
         if (!keys.length) {
-          await safeSend(msg, { embeds: [embed().setTitle("Keys: " + script.name + " (0)").setDescription("No keys found. Use /createkey.")] });
-          return;
+          return interaction.reply({ content: 'No keys found.', ephemeral: true });
         }
-        const lines = keys.map(function (k) {
-          const isExpired = k.expiresAt && k.expiresAt.getTime() < Date.now();
-          const note = k.note ? " - " + k.note : "";
-          const expiry = formatExpiry(k.expiresAt);
-          return (isExpired ? "Expired" : "Active") + " | " + maskKey(k.key) + note + " | " + expiry;
+        const lines = keys.map(k => {
+          const isExpired = k.expires_at && new Date(k.expires_at).getTime() < Date.now();
+          const status = isExpired ? '⛔ Expired' : '✅ Active';
+          const expiry = k.expires_at ? formatExpiry(k.expires_at) : 'Permanent';
+          const hwid = k.hwid ? k.hwid.slice(0, 12) + '...' : 'None';
+          return `${status} | ${maskKey(k.key)} | HWID: ${hwid} | ${expiry}${k.note ? ' | Note: ' + k.note : ''}`;
         });
-        await safeSend(msg, { embeds: [embed().setTitle("Keys: " + script.name + " (" + keys.length + ")").setDescription(lines.join("\n"))] });
+        const embed = new EmbedBuilder()
+          .setColor(BRAND_COLOR)
+          .setTitle('Key Info')
+          .setDescription(lines.join('\n'))
+          .setFooter({ text: 'Karma Hosting' })
+          .setTimestamp();
+        await interaction.reply({ embeds: [embed], ephemeral: true });
         break;
       }
-
-      /* /createkey <script> [note] [hours] */
-      case "createkey": {
-        const user = await resolveUser(msg.author.id);
-        if (!user) {
-          await safeSend(msg, { embeds: [err("Not Registered", "Use /setup first.")] });
-          return;
+      
+      case 'l': {
+        const key = db.prepare('SELECT * FROM keys WHERE script_id = ? AND user_id = ? ORDER BY created_at DESC').get(scriptId, user.id);
+        if (!key) {
+          return interaction.reply({ content: 'No active key found.', ephemeral: true });
         }
-        const scriptName = args[0] || "";
-        if (!scriptName) {
-          await safeSend(msg, { embeds: [err("Missing Argument", "Usage: /createkey <script> [note] [hours]")] });
-          return;
-        }
-        let note = null;
-        let hours = null;
-        if (args.length >= 2) {
-          const lastArg = args[args.length - 1];
-          const parsed = parseInt(lastArg);
-          if (!isNaN(parsed) && String(parsed) === lastArg) {
-            hours = parsed;
-            if (args.length > 2) note = args.slice(1, -1).join(" ");
-          } else {
-            note = args.slice(1).join(" ");
-          }
-        }
-        const script = await findScript(user.id, scriptName);
-        if (!script) {
-          await safeSend(msg, { embeds: [err("Not Found", "No script found matching that name.")] });
-          return;
-        }
-        const expiresAt = hours ? new Date(Date.now() + hours * 3600000) : null;
-        const kv = generateKey();
-        await prisma.key.create({
-          data: { scriptId: script.id, userId: user.id, key: kv, note, expiresAt },
-        });
-        const keyEmbed = embed().setTitle("Key Generated").setColor(0x22c55e).setDescription(
-          "Script: " + script.name + "\nKey: " + kv +
-          (note ? "\nNote: " + note : "") +
-          (expiresAt ? "\nExpires: " + formatExpiry(expiresAt) : "\nDuration: Permanent")
-        );
-        const dmSent = await safeDm(msg, { embeds: [keyEmbed] });
-        if (dmSent) {
-          await safeSend(msg, { embeds: [ok("Key Created", "Key for " + script.name + " sent to your DMs.")] });
-        } else {
-          await safeSend(msg, { embeds: [ok("Key Created", "Key for " + script.name + " (DMs off):\n" + kv)] });
-        }
+        const loadstring = `loadstring(game:HttpGet("${publicBaseUrl()}/loader/${scriptId}?key=${key.key}"))()`;
+        await interaction.reply({ content: `\`\`\`lua\n${loadstring}\n\`\`\``, ephemeral: true });
         break;
       }
-
-      /* /generate <id> <hours> [note] */
-      case "generate": {
-        const user = await resolveUser(msg.author.id);
-        if (!user) {
-          await safeSend(msg, { embeds: [err("Not Registered", "Use /setup first.")] });
-          return;
-        }
-        const id = args[0] || "";
-        const hoursVal = args[1] ? parseInt(args[1]) : NaN;
-        const note = args.length > 2 ? args.slice(2).join(" ") : null;
-        if (!id || isNaN(hoursVal)) {
-          await safeSend(msg, { embeds: [err("Missing Argument", "Usage: /generate <id> <hours> [note]")] });
-          return;
-        }
-        const script = await prisma.script.findFirst({ where: { id: id, userId: user.id } });
-        if (!script) {
-          await safeSend(msg, { embeds: [err("Not Found", "No script with ID: " + id)] });
-          return;
-        }
-        const expiresAt = hoursVal === 0 ? null : new Date(Date.now() + hoursVal * 3600000);
-        const info = hoursVal === 0 ? "Permanent" : hoursVal + "h";
-        const kv = generateKey();
-        await prisma.key.create({
-          data: { scriptId: script.id, userId: user.id, key: kv, note, expiresAt },
-        });
-        const keyEmbed = embed().setTitle("Key Generated").setColor(0x22c55e).setDescription(
-          "Script: " + script.name + "\nKey: " + kv + "\nDuration: " + info +
-          (note ? "\nNote: " + note : "")
-        );
-        const dmSent = await safeDm(msg, { embeds: [keyEmbed] });
-        if (dmSent) {
-          await safeSend(msg, { embeds: [ok("Key Generated", "Key for " + script.name + " (" + info + ") sent to DMs.")] });
-        } else {
-          await safeSend(msg, { embeds: [ok("Key Generated", "Key for " + script.name + " (" + info + "):\n" + kv)] });
-        }
-        break;
-      }
-
-      /* /revoke <key> */
-      case "revoke": {
-        const user = await resolveUser(msg.author.id);
-        if (!user) {
-          await safeSend(msg, { embeds: [err("Not Registered", "Use /setup first.")] });
-          return;
-        }
-        const raw = (args[0] || "").toUpperCase();
-        if (!raw) {
-          await safeSend(msg, { embeds: [err("Missing Argument", "Usage: /revoke <key>")] });
-          return;
-        }
-        const kr = await prisma.key.findFirst({
-          where: {
-            userId: user.id,
-            OR: [
-              { key: { equals: raw, mode: "insensitive" } },
-              { key: { endsWith: raw.replace("KARMA-", "") } },
-            ],
-          },
-          include: { script: true },
-        });
-        if (!kr) {
-          await safeSend(msg, { embeds: [err("Not Found", "No key matching that input.")] });
-          return;
-        }
-        await prisma.key.delete({ where: { id: kr.id } });
-        await safeSend(msg, { embeds: [ok("Key Revoked", maskKey(kr.key) + " for " + kr.script.name + " deleted.")] });
-        break;
-      }
-
-      /* /reset-hwid <key> */
-      case "reset-hwid": {
-        const user = await resolveUser(msg.author.id);
-        if (!user) {
-          await safeSend(msg, { embeds: [err("Not Registered", "Use /setup first.")] });
-          return;
-        }
-        const raw = (args[0] || "").toUpperCase();
-        if (!raw) {
-          await safeSend(msg, { embeds: [err("Missing Argument", "Usage: /reset-hwid <key>")] });
-          return;
-        }
-        const kr = await prisma.key.findFirst({
-          where: {
-            userId: user.id,
-            OR: [
-              { key: { equals: raw, mode: "insensitive" } },
-              { key: { endsWith: raw.replace("KARMA-", "") } },
-            ],
-          },
-          include: { script: true },
-        });
-        if (!kr) {
-          await safeSend(msg, { embeds: [err("Not Found", "No key matching that input.")] });
-          return;
-        }
-        if (kr.resettable) {
-          const elapsed = Date.now() - kr.resettable.getTime();
-          if (elapsed < COOLDOWN_MS) {
-            await safeSend(msg, { embeds: [err("Cooldown", "Try again in " + timeRemaining(COOLDOWN_MS - elapsed) + ".")] });
-            return;
-          }
-        }
-        await prisma.key.update({ where: { id: kr.id }, data: { hwid: null, resettable: new Date() } });
-        await safeSend(msg, { embeds: [ok("HWID Reset", "HWID for " + maskKey(kr.key) + " on " + kr.script.name + " cleared.")] });
-        break;
-      }
-
-      /* /ban <hwid> */
-      case "ban": {
-        if (msg.author.id !== OWNER_ID) {
-          await safeSend(msg, { embeds: [err("No Permission", "Owner only.")] });
-          return;
-        }
-        const hwid = (args[0] || "").toUpperCase();
-        if (!hwid) {
-          await safeSend(msg, { embeds: [err("Missing Argument", "Usage: /ban <hwid>")] });
-          return;
-        }
-        if (bannedHwids.has(hwid)) {
-          await safeSend(msg, { embeds: [err("Already Banned", hwid + " is already banned.")] });
-          return;
-        }
-        bannedHwids.add(hwid);
-        await safeSend(msg, { embeds: [ok("HWID Banned", hwid + " added to ban list.")] });
-        break;
-      }
-
-      /* /unban <hwid> */
-      case "unban": {
-        if (msg.author.id !== OWNER_ID) {
-          await safeSend(msg, { embeds: [err("No Permission", "Owner only.")] });
-          return;
-        }
-        const hwid = (args[0] || "").toUpperCase();
-        if (!hwid) {
-          await safeSend(msg, { embeds: [err("Missing Argument", "Usage: /unban <hwid>")] });
-          return;
-        }
-        if (!bannedHwids.has(hwid)) {
-          await safeSend(msg, { embeds: [err("Not Found", hwid + " not in ban list.")] });
-          return;
-        }
-        bannedHwids.delete(hwid);
-        await safeSend(msg, { embeds: [ok("HWID Unbanned", hwid + " removed from ban list.")] });
+      
+      case 'h': {
+        const modal = new ModalBuilder()
+          .setCustomId(`hm_${scriptId}`)
+          .setTitle('Reset HWID');
+        const input = new TextInputBuilder()
+          .setCustomId('key_input')
+          .setLabel('Enter your license key')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        await interaction.showModal(modal);
         break;
       }
     }
   } catch (e) {
-    console.error("[" + new Date().toISOString() + "] Command error:", e.message || e);
-    try {
-      await safeSend(msg, { embeds: [err("Error", "Something went wrong.")] });
-    } catch {}
+    console.error('Button error:', e);
+    await interaction.reply({ content: 'Something went wrong.', ephemeral: true });
   }
 });
 
-// ─── Interaction Handler (Buttons + Modals) ───────────────────────────────────
+// ---------------- Modal Handler ----------------
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isModalSubmit()) return;
+  
+  const customId = interaction.customId;
+  
+  try {
+    const user = db.prepare('SELECT * FROM users WHERE discord_id = ?').get(interaction.user.id);
+    if (!user) {
+      return interaction.reply({ content: 'Use /setup first.', ephemeral: true });
+    }
+    
+    if (customId.startsWith('rm_')) {
+      const scriptId = customId.substring(3);
+      const keyVal = interaction.fields.getTextInputValue('key_input').toUpperCase();
+      
+      const keyRecord = db.prepare('SELECT * FROM keys WHERE key = ? AND script_id = ? AND user_id = ?').get(keyVal, scriptId, user.id);
+      if (!keyRecord) {
+        return interaction.reply({ content: 'Invalid key.', ephemeral: true });
+      }
+      if (keyRecord.expires_at && new Date(keyRecord.expires_at).getTime() < Date.now()) {
+        return interaction.reply({ content: 'This key has expired.', ephemeral: true });
+      }
+      
+      db.prepare('UPDATE keys SET last_used_at = CURRENT_TIMESTAMP WHERE key = ?').run(keyVal);
+      await interaction.reply({ content: '✅ Key redeemed successfully!', ephemeral: true });
+    }
+    
+    if (customId.startsWith('hm_')) {
+      const scriptId = customId.substring(3);
+      const keyVal = interaction.fields.getTextInputValue('key_input').toUpperCase();
+      
+      const keyRecord = db.prepare('SELECT * FROM keys WHERE key = ? AND script_id = ? AND user_id = ?').get(keyVal, scriptId, user.id);
+      if (!keyRecord) {
+        return interaction.reply({ content: 'Invalid key.', ephemeral: true });
+      }
+      
+      if (keyRecord.resettable) {
+        const elapsed = Date.now() - new Date(keyRecord.resettable).getTime();
+        if (elapsed < COOLDOWN_MS) {
+          return interaction.reply({ content: `⏳ Cooldown active. Try again in ${timeRemaining(COOLDOWN_MS - elapsed)}.`, ephemeral: true });
+        }
+      }
+      
+      db.prepare('UPDATE keys SET hwid = NULL, resettable = CURRENT_TIMESTAMP WHERE key = ?').run(keyVal);
+      await interaction.reply({ content: '🔄 HWID reset successfully!', ephemeral: true });
+    }
+  } catch (e) {
+    console.error('Modal error:', e);
+    await interaction.reply({ content: 'Something went wrong.', ephemeral: true });
+  }
+});
 
-client.on("interactionCreate", async (interaction) => {
-  if (interaction.isModalSubmit()) {
-    await handleModal(interaction);
+// ---------------- Loader Routes ----------------
+app.get('/loader/:scriptId', (req, res) => {
+  const { scriptId, key } = req.query;
+  if (!scriptId) return res.status(400).type('text/plain').send('-- Missing script ID');
+  
+  const script = db.prepare('SELECT * FROM scripts WHERE id = ?').get(scriptId);
+  if (!script) return res.status(404).type('text/plain').send('-- Script not found');
+  
+  // If key is provided, verify it
+  if (key) {
+    const keyRecord = db.prepare('SELECT * FROM keys WHERE key = ? AND script_id = ?').get(key, scriptId);
+    if (!keyRecord) return res.status(403).type('text/plain').send('-- Invalid key');
+    if (keyRecord.expires_at && new Date(keyRecord.expires_at).getTime() < Date.now()) {
+      return res.status(403).type('text/plain').send('-- Key expired');
+    }
+    db.prepare('UPDATE keys SET last_used_at = CURRENT_TIMESTAMP WHERE key = ?').run(key);
+  }
+  
+  const baseUrl = publicBaseUrl();
+  const loadstring = `loadstring(game:HttpGet("${baseUrl}/script/${scriptId}"))()`;
+  res.type('text/plain').send(`--[[ Karma Protection Loader ]]\nreturn (function()\n  local url = "${baseUrl}/script/${scriptId}"\n  local src = game:HttpGet(url)\n  if not src or #src < 10 then error("Invalid script payload") end\n  local func, err = loadstring(src, "@KarmaVM")\n  if not func then error(err) end\n  return func()\nend)()`);
+});
+
+app.get('/script/:scriptId', (req, res) => {
+  const script = db.prepare('SELECT * FROM scripts WHERE id = ?').get(req.params.scriptId);
+  if (!script) return res.status(404).type('text/plain').send('-- Script not found');
+  
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('text/plain').send(script.code || '-- Empty script');
+});
+
+// ---------------- Start Server ----------------
+const port = Number(process.env.PORT || 3000);
+
+async function deployCommands() {
+  if (!CLIENT_ID) {
+    console.log('CLIENT_ID missing, skipping slash command deploy.');
     return;
   }
-  if (interaction.isButton()) {
-    await handleButton(interaction);
-    return;
+
+  const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
+
+  if (GUILD_ID) {
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: [] });
+    console.log('Cleared guild commands.');
   }
-});
+}
 
-// ─── Error Handlers ───────────────────────────────────────────────────────────
+(async () => {
+  try {
+    await deployCommands();
+  } catch (error) {
+    console.error('Command deploy failed:', error);
+  }
 
-process.on("unhandledRejection", function (r) {
-  console.error("[" + new Date().toISOString() + "] Rejection:", r);
-});
-process.on("uncaughtException", function (e) {
-  console.error("[" + new Date().toISOString() + "] Uncaught:", e.message || e);
-});
-
-// ─── Login ────────────────────────────────────────────────────────────────────
-
-console.log("[" + new Date().toISOString() + "] Starting Karma Bot...");
-client
-  .login(TOKEN)
-  .then(function () {
-    console.log("[" + new Date().toISOString() + "] Login OK, connecting...");
-  })
-  .catch(function (e) {
-    console.error("[" + new Date().toISOString() + "] Login failed:", e.message);
-    setTimeout(function () { process.exit(1); }, 10000);
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`Karma Protection v6.3 running on port ${port}`);
+    console.log(`Website: http://localhost:${port}`);
   });
+  
+  await client.login(DISCORD_TOKEN);
+})();
