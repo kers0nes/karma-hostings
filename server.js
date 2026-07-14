@@ -1,4 +1,4 @@
-// server.js – Karma Protection v6.8 (Dark Blue Edition)
+// server.js – Karma Protection v6.8 (Dark Blue Edition) – FIXED
 // No bcrypt or nodemailer dependencies – uses built-in crypto
 
 const express = require('express');
@@ -633,7 +633,7 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-login').classList.toggle('hidden', tab !== 'login');
   document.getElementById('tab-register').classList.toggle('hidden', tab !== 'register');
-  document.querySelector(`.tab-btn[onclick*="${tab}"]`).classList.add('active');
+  document.querySelector(\`.tab-btn[onclick*="\${tab}"]\`).classList.add('active');
 }
 function showRecovery() {
   document.getElementById('tab-login').classList.add('hidden');
@@ -959,15 +959,15 @@ app.get('/dashboard', requireAuth, (req, res) => {
         const ffaBadge = s.ffa_mode ? '<span class="badge badge-warning">FFA</span>' : '';
         const compressBadge = s.compress_mode ? '<span class="badge badge-primary">Compressed</span>' : '';
         const date = new Date(s.created_at).toLocaleDateString();
-        html += `<div class="script-card" onclick="viewScript('${s.id}')">
-          <div class="title">${escapeHtml(s.name)}</div>
-          <div class="meta"><span class="badge ${statusBadge}">${statusText}</span> ${ffaBadge} ${compressBadge} <span style="margin-left:8px;">${date}</span></div>
+        html += \`<div class="script-card" onclick="viewScript('\${s.id}')">
+          <div class="title">\${escapeHtml(s.name)}</div>
+          <div class="meta"><span class="badge \${statusBadge}">\${statusText}</span> \${ffaBadge} \${compressBadge} <span style="margin-left:8px;">\${date}</span></div>
           <div class="actions">
-            <button class="btn btn-outline" onclick="event.stopPropagation();toggleScript('${s.id}')">${s.status==='active'?'Disable':'Enable'}</button>
-            <button class="btn btn-outline" onclick="event.stopPropagation();toggleFfa('${s.id}')">${s.ffa_mode?'Disable FFA':'Enable FFA'}</button>
-            <button class="btn btn-danger" onclick="event.stopPropagation();deleteScript('${s.id}')">Delete</button>
+            <button class="btn btn-outline" onclick="event.stopPropagation();toggleScript('\${s.id}')">\${s.status==='active'?'Disable':'Enable'}</button>
+            <button class="btn btn-outline" onclick="event.stopPropagation();toggleFfa('\${s.id}')">\${s.ffa_mode?'Disable FFA':'Enable FFA'}</button>
+            <button class="btn btn-danger" onclick="event.stopPropagation();deleteScript('\${s.id}')">Delete</button>
           </div>
-        </div>`;
+        </div>\`;
       }
       container.innerHTML = html;
     }
@@ -980,14 +980,14 @@ app.get('/dashboard', requireAuth, (req, res) => {
       }
       let html = '';
       for (const p of currentData.panels) {
-        html += `<div class="script-card">
-          <div class="title">${escapeHtml(p.name)}</div>
-          <div class="meta">${escapeHtml(p.description || 'No description')}</div>
+        html += \`<div class="script-card">
+          <div class="title">\${escapeHtml(p.name)}</div>
+          <div class="meta">\${escapeHtml(p.description || 'No description')}</div>
           <div class="actions">
-            <button class="btn btn-success" onclick="sendPanel('${p.id}')">Send to Discord</button>
-            <button class="btn btn-danger" onclick="deletePanel('${p.id}')">Delete</button>
+            <button class="btn btn-success" onclick="sendPanel('\${p.id}')">Send to Discord</button>
+            <button class="btn btn-danger" onclick="deletePanel('\${p.id}')">Delete</button>
           </div>
-        </div>`;
+        </div>\`;
       }
       container.innerHTML = html;
     }
@@ -1004,11 +1004,11 @@ app.get('/dashboard', requireAuth, (req, res) => {
         let status = 'Active', badgeClass = 'badge-success';
         if (expired) { status = 'Expired'; badgeClass = 'badge-danger'; }
         else if (k.hwid) { status = 'HWID Locked'; badgeClass = 'badge-warning'; }
-        html += `<div class="script-card">
-          <div class="title" style="font-family:monospace;font-size:13px;color:var(--primary);">${escapeHtml(k.key)}</div>
-          <div class="meta"><span class="badge ${badgeClass}">${status}</span> ${k.note ? '<span style="margin-left:8px;">'+escapeHtml(k.note)+'</span>' : ''}</div>
-          <div class="actions"><button class="btn btn-danger" onclick="deleteKey('${k.key}')">Delete</button></div>
-        </div>`;
+        html += \`<div class="script-card">
+          <div class="title" style="font-family:monospace;font-size:13px;color:var(--primary);">\${escapeHtml(k.key)}</div>
+          <div class="meta"><span class="badge \${badgeClass}">\${status}</span> \${k.note ? '<span style="margin-left:8px;">'+escapeHtml(k.note)+'</span>' : ''}</div>
+          <div class="actions"><button class="btn btn-danger" onclick="deleteKey('\${k.key}')">Delete</button></div>
+        </div>\`;
       }
       container.innerHTML = html;
     }
@@ -1025,11 +1025,11 @@ app.get('/dashboard', requireAuth, (req, res) => {
         const expired = w.expires_at && new Date(w.expires_at).getTime() < serverTime;
         const status = expired ? 'Expired' : 'Active';
         const badgeClass = expired ? 'badge-danger' : 'badge-success';
-        html += `<div class="script-card">
-          <div class="title">${escapeHtml(w.username || w.discord_id)}</div>
-          <div class="meta"><span class="badge ${badgeClass}">${status}</span> ${w.hwid ? 'HWID Locked' : 'No HWID'} <span style="margin-left:8px;">Key: ${escapeHtml(w.key)}</span></div>
-          <div class="actions"><button class="btn btn-outline" onclick="removeWhitelist('${w.id}')">Remove</button></div>
-        </div>`;
+        html += \`<div class="script-card">
+          <div class="title">\${escapeHtml(w.username || w.discord_id)}</div>
+          <div class="meta"><span class="badge \${badgeClass}">\${status}</span> \${w.hwid ? 'HWID Locked' : 'No HWID'} <span style="margin-left:8px;">Key: \${escapeHtml(w.key)}</span></div>
+          <div class="actions"><button class="btn btn-outline" onclick="removeWhitelist('\${w.id}')">Remove</button></div>
+        </div>\`;
       }
       container.innerHTML = html;
     }
@@ -1042,11 +1042,11 @@ app.get('/dashboard', requireAuth, (req, res) => {
       }
       let html = '';
       for (const h of currentData.bannedHWIDs) {
-        html += `<div class="script-card">
-          <div class="title" style="font-family:monospace;font-size:13px;color:var(--danger);">${escapeHtml(h.hwid)}</div>
-          <div class="meta">Banned ${new Date(h.created_at).toLocaleDateString()}</div>
-          <div class="actions"><button class="btn btn-outline" onclick="unbanHwid('${h.hwid}')">Unban</button></div>
-        </div>`;
+        html += \`<div class="script-card">
+          <div class="title" style="font-family:monospace;font-size:13px;color:var(--danger);">\${escapeHtml(h.hwid)}</div>
+          <div class="meta">Banned \${new Date(h.created_at).toLocaleDateString()}</div>
+          <div class="actions"><button class="btn btn-outline" onclick="unbanHwid('\${h.hwid}')">Unban</button></div>
+        </div>\`;
       }
       container.innerHTML = html;
     }
@@ -1060,10 +1060,10 @@ app.get('/dashboard', requireAuth, (req, res) => {
       }
       let html = '<div style="display:flex;flex-direction:column;gap:8px;">';
       for (const k of keys) {
-        html += `<div class="flex-between" style="padding:8px 12px;background:rgba(0,0,0,0.2);border-radius:8px;border:1px solid var(--border);">
-          <div><span style="font-family:monospace;font-size:13px;color:var(--primary);">${escapeHtml(k.key)}</span> ${k.name ? '<span class="text-muted" style="margin-left:8px;">'+escapeHtml(k.name)+'</span>' : ''}</div>
-          <button class="btn btn-danger" style="padding:4px 12px;font-size:12px;" onclick="deleteApiKey('${k.id}')">Delete</button>
-        </div>`;
+        html += \`<div class="flex-between" style="padding:8px 12px;background:rgba(0,0,0,0.2);border-radius:8px;border:1px solid var(--border);">
+          <div><span style="font-family:monospace;font-size:13px;color:var(--primary);">\${escapeHtml(k.key)}</span> \${k.name ? '<span class="text-muted" style="margin-left:8px;">'+escapeHtml(k.name)+'</span>' : ''}</div>
+          <button class="btn btn-danger" style="padding:4px 12px;font-size:12px;" onclick="deleteApiKey('\${k.id}')">Delete</button>
+        </div>\`;
       }
       html += '</div>';
       container.innerHTML = html;
@@ -1073,12 +1073,12 @@ app.get('/dashboard', requireAuth, (req, res) => {
       const panelScript = document.getElementById('panelScript');
       panelScript.innerHTML = '<option value="">Select script...</option>';
       for (const s of currentData.scripts) {
-        panelScript.innerHTML += `<option value="${s.id}">${escapeHtml(s.name)}</option>`;
+        panelScript.innerHTML += \`<option value="\${s.id}">\${escapeHtml(s.name)}</option>\`;
       }
       const keyPanel = document.getElementById('keyPanel');
       keyPanel.innerHTML = '<option value="">Select panel...</option>';
       for (const p of currentData.panels) {
-        keyPanel.innerHTML += `<option value="${p.id}">${escapeHtml(p.name)}</option>`;
+        keyPanel.innerHTML += \`<option value="\${p.id}">\${escapeHtml(p.name)}</option>\`;
       }
     }
 
