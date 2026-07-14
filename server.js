@@ -27,7 +27,7 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 const DATABASE_PATH = process.env.DATABASE_PATH || './data.sqlite';
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://luarmor-bot-1-0yt4.onrender.com';
-const SESSION_SECRET = process.env.SESSION_SECRET;
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 const OWNER_ID = process.env.OWNER_ID || 'YOUR_DISCORD_ID_HERE';
 const BRAND_COLOR = parseInt(process.env.BRAND_COLOR) || 0xD4AF37;
 const PREFIX = process.env.PREFIX || '/';
@@ -36,7 +36,8 @@ const SESSION_SIGNING_SECRET = SESSION_SECRET || crypto.randomBytes(32).toString
 const COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 if (!DISCORD_TOKEN) {
-  console.error('Missing DISCORD_TOKEN environment variable.');
+  console.error('❌ Missing DISCORD_TOKEN environment variable.');
+  console.error('Set it with: export DISCORD_TOKEN=your_token_here');
   process.exit(1);
 }
 
@@ -420,6 +421,22 @@ app.post('/api/unban-hwid', (req, res) => {
   res.json({ success: true });
 });
 
+app.post('/api/delete-whitelist', (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  
+  const { id } = req.body;
+  if (!id) return res.status(400).json({ error: 'ID required' });
+  
+  const entry = db.prepare('SELECT * FROM whitelist WHERE id = ? AND user_id = ?').get(id, user.id);
+  if (!entry) return res.status(404).json({ error: 'Whitelist entry not found' });
+  
+  db.prepare('DELETE FROM whitelist WHERE id = ? AND user_id = ?').run(id, user.id);
+  db.prepare('DELETE FROM keys WHERE key = ? AND user_id = ?').run(entry.key, user.id);
+  
+  res.json({ success: true });
+});
+
 // ---------------- Discord Auth Routes ----------------
 app.get('/api/auth/discord', (req, res) => {
   const state = crypto.randomBytes(18).toString('hex');
@@ -498,6 +515,11 @@ app.get('/api/auth/discord/callback', async (req, res) => {
 app.get('/logout', (req, res) => {
   req.session.destroy();
   res.redirect('/');
+});
+
+// ---------------- Health Check ----------------
+app.get('/health', (req, res) => {
+  res.json({ ok: true, name: 'Karma Protection v6.5 Gold' });
 });
 
 // ---------------- Website Routes - Gold Theme ----------------
@@ -1547,32 +1569,6 @@ app.get('/dashboard', requireAuth, (req, res) => {
 </html>`);
 });
 
-// ---------------- Delete Whitelist API ----------------
-app.post('/api/delete-whitelist', (req, res) => {
-  const user = getSessionUser(req);
-  if (!user) return res.status(401).json({ error: 'Not authenticated' });
-  
-  const { id } = req.body;
-  if (!id) return res.status(400).json({ error: 'ID required' });
-  
-  // Get the whitelist entry to get the key
-  const entry = db.prepare('SELECT * FROM whitelist WHERE id = ? AND user_id = ?').get(id, user.id);
-  if (!entry) return res.status(404).json({ error: 'Whitelist entry not found' });
-  
-  // Delete from whitelist
-  db.prepare('DELETE FROM whitelist WHERE id = ? AND user_id = ?').run(id, user.id);
-  
-  // Also delete the associated key
-  db.prepare('DELETE FROM keys WHERE key = ? AND user_id = ?').run(entry.key, user.id);
-  
-  res.json({ success: true });
-});
-
-// ---------------- Health Check ----------------
-app.get('/health', (req, res) => {
-  res.json({ ok: true, name: 'Karma Protection v6.5 Gold' });
-});
-
 // ---------------- Discord Bot ----------------
 const client = new Client({
   intents: [
@@ -2233,7 +2229,6 @@ app.get('/loader/:scriptId', (req, res) => {
   db.prepare('UPDATE keys SET last_used_at = CURRENT_TIMESTAMP WHERE key = ?').run(key);
   
   const baseUrl = publicBaseUrl();
-  // The loader string now uses your Render URL
   const loadstring = `loadstring(game:HttpGet("${baseUrl}/script/${scriptId}?hwid=${hwid || ''}&key=${key}"))()`;
   
   res.type('text/plain').send(`--[[ ✨ Karma Gold Loader v6.5 ✨ ]]\n-- HWID Protected\nreturn (function()\n  local url = "${baseUrl}/script/${scriptId}?hwid=${hwid || ''}&key=${key}"\n  local src = game:HttpGet(url)\n  if not src or #src < 10 then error("Invalid script payload") end\n  local func, err = loadstring(src, "@KarmaGold")\n  if not func then error(err) end\n  return func()\nend)()`);
