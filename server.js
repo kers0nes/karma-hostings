@@ -1,5 +1,5 @@
 // server.js
-// Karma Protection v6.3 - No dotenv, pure environment variables
+// Karma Protection v6.5 - Gold Edition
 
 const express = require('express');
 const Database = require('better-sqlite3');
@@ -21,14 +21,13 @@ const {
   TextInputStyle,
 } = require('discord.js');
 
-// ============ ENVIRONMENT VARIABLES (no dotenv) ============
+// ============ ENVIRONMENT VARIABLES ============
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 const DATABASE_PATH = process.env.DATABASE_PATH || './data.sqlite';
-const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://your-app.up.railway.app';
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://luarmor-bot-1-0yt4.onrender.com';
 const SESSION_SECRET = process.env.SESSION_SECRET;
-const DISCORD_INVITE_URL = process.env.DISCORD_INVITE_URL || 'https://discord.gg/your-invite';
 const OWNER_ID = process.env.OWNER_ID || 'YOUR_DISCORD_ID_HERE';
 const BRAND_COLOR = parseInt(process.env.BRAND_COLOR) || 0xD4AF37;
 const PREFIX = process.env.PREFIX || '/';
@@ -38,11 +37,10 @@ const COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 if (!DISCORD_TOKEN) {
   console.error('Missing DISCORD_TOKEN environment variable.');
-  console.error('Set it with: export DISCORD_TOKEN=your_token_here');
   process.exit(1);
 }
 
-console.log('✅ Karma Protection v6.3 starting...');
+console.log('✨ Karma Protection v6.5 - Gold Edition starting...');
 console.log(`📁 Database: ${DATABASE_PATH}`);
 console.log(`🌐 Base URL: ${PUBLIC_BASE_URL}`);
 
@@ -115,6 +113,20 @@ CREATE TABLE IF NOT EXISTS sessions (
   sid TEXT PRIMARY KEY,
   sess TEXT NOT NULL,
   expire INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS whitelist (
+  id TEXT PRIMARY KEY,
+  script_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  key TEXT UNIQUE NOT NULL,
+  discord_id TEXT NOT NULL,
+  username TEXT,
+  hwid TEXT,
+  expires_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(script_id) REFERENCES scripts(id),
+  FOREIGN KEY(user_id) REFERENCES users(id)
 );
 `);
 
@@ -214,12 +226,14 @@ app.get('/api/data', (req, res) => {
   const panels = db.prepare('SELECT * FROM panels WHERE user_id = ? ORDER BY created_at DESC').all(user.id);
   const keys = db.prepare('SELECT * FROM keys WHERE user_id = ? ORDER BY created_at DESC').all(user.id);
   const banned = db.prepare('SELECT * FROM banned_hwids ORDER BY created_at DESC').all();
+  const whitelist = db.prepare('SELECT * FROM whitelist WHERE user_id = ? ORDER BY created_at DESC').all(user.id);
   
   res.json({
     scripts,
     panels,
     keys,
     bannedHWIDs: banned,
+    whitelist,
     serverTime: Date.now()
   });
 });
@@ -420,6 +434,7 @@ app.get('/api/auth/discord', (req, res) => {
     state
   });
   
+  console.log('🔑 OAuth Redirect URI:', redirectUri);
   res.redirect(`https://discord.com/oauth2/authorize?${params.toString()}`);
 });
 
@@ -485,7 +500,7 @@ app.get('/logout', (req, res) => {
   res.redirect('/');
 });
 
-// ---------------- Website Routes ----------------
+// ---------------- Website Routes - Gold Theme ----------------
 app.get('/', (req, res) => {
   if (req.session.user) return res.redirect('/dashboard');
   
@@ -494,19 +509,21 @@ app.get('/', (req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Karma Protection | Secure Dashboard</title>
+  <title>Karma Protection | Gold Edition</title>
   <style>
     :root {
-      --bg-color: #09090b;
-      --card-bg: rgba(18, 18, 20, 0.65);
+      --bg-color: #0a0a0a;
+      --card-bg: rgba(18, 18, 20, 0.85);
       --primary: #d4af37;
-      --primary-hover: #e3c94a;
+      --primary-hover: #e8c84a;
+      --primary-gradient: linear-gradient(135deg, #d4af37, #f5d76e, #d4af37);
       --discord: #5865F2;
       --discord-hover: #4752C4;
       --text-main: #f8fafc;
-      --text-muted: #9ca3af;
-      --border: rgba(255, 255, 255, 0.08);
-      --glow: rgba(212, 175, 55, 0.15);
+      --text-muted: #b0a8a0;
+      --border: rgba(212, 175, 55, 0.2);
+      --glow: rgba(212, 175, 55, 0.25);
+      --shadow: 0 0 60px rgba(212, 175, 55, 0.08);
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -517,6 +534,7 @@ app.get('/', (req, res) => {
       display: flex;
       align-items: center;
       justify-content: center;
+      background-image: radial-gradient(ellipse at 50% 0%, rgba(212, 175, 55, 0.06) 0%, transparent 70%);
     }
     .container { max-width: 1200px; margin: 0 auto; padding: 20px; width: 100%; }
     
@@ -525,56 +543,82 @@ app.get('/', (req, res) => {
       backdrop-filter: blur(20px);
       border: 1px solid var(--border);
       border-radius: 24px;
-      padding: 40px;
-      max-width: 440px;
+      padding: 48px 40px;
+      max-width: 460px;
       width: 100%;
       margin: 0 auto;
-      box-shadow: 0 0 40px rgba(0, 0, 0, 0.8), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+      box-shadow: var(--shadow), inset 0 0 0 1px rgba(212, 175, 55, 0.05);
       text-align: center;
+      position: relative;
+      overflow: hidden;
     }
-    .logo { margin-bottom: 20px; }
-    .logo svg { width: 48px; height: 48px; color: var(--primary); }
+    .glass-card::before {
+      content: '';
+      position: absolute;
+      top: -50%;
+      left: -50%;
+      width: 200%;
+      height: 200%;
+      background: conic-gradient(from 0deg, transparent, rgba(212, 175, 55, 0.03), transparent, rgba(212, 175, 55, 0.03), transparent);
+      animation: rotate 20s linear infinite;
+      pointer-events: none;
+    }
+    @keyframes rotate { 100% { transform: rotate(360deg); } }
+    
+    .logo { margin-bottom: 24px; position: relative; z-index: 1; }
+    .logo svg { width: 56px; height: 56px; color: var(--primary); filter: drop-shadow(0 0 20px rgba(212, 175, 55, 0.3)); }
     h1 {
-      font-size: 24px;
+      font-size: 28px;
       font-weight: 800;
       letter-spacing: -0.5px;
       margin-bottom: 8px;
+      position: relative;
+      z-index: 1;
     }
-    h1 span { color: var(--primary); }
-    p { color: var(--text-muted); font-size: 14px; margin-bottom: 24px; }
+    h1 span { 
+      background: var(--primary-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .subtitle { color: var(--text-muted); font-size: 14px; margin-bottom: 28px; position: relative; z-index: 1; }
     
     .btn-discord {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 10px;
+      gap: 12px;
       width: 100%;
-      padding: 14px 20px;
-      background: var(--discord);
-      color: white;
+      padding: 16px 24px;
+      background: var(--primary-gradient);
+      color: #0a0a0a;
       border: none;
-      border-radius: 12px;
-      font-weight: 600;
-      font-size: 15px;
+      border-radius: 14px;
+      font-weight: 700;
+      font-size: 16px;
       cursor: pointer;
       transition: all 0.3s ease;
       text-decoration: none;
+      position: relative;
+      z-index: 1;
+      box-shadow: 0 4px 30px rgba(212, 175, 55, 0.3);
     }
     .btn-discord:hover {
-      background: var(--discord-hover);
-      transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(88, 101, 242, 0.4);
+      transform: translateY(-3px);
+      box-shadow: 0 8px 40px rgba(212, 175, 55, 0.5);
     }
-    .btn-discord svg { width: 20px; height: 20px; fill: currentColor; }
+    .btn-discord svg { width: 22px; height: 22px; fill: #0a0a0a; }
     
     .footer-links {
-      margin-top: 20px;
+      margin-top: 24px;
       padding-top: 20px;
       border-top: 1px solid var(--border);
       display: flex;
-      gap: 16px;
+      gap: 20px;
       justify-content: center;
       flex-wrap: wrap;
+      position: relative;
+      z-index: 1;
     }
     .footer-links button {
       background: none;
@@ -583,34 +627,35 @@ app.get('/', (req, res) => {
       font-size: 13px;
       cursor: pointer;
       transition: color 0.2s;
+      font-weight: 500;
     }
-    .footer-links button:hover { color: white; }
+    .footer-links button:hover { color: var(--primary); }
     
     .hidden { display: none !important; }
-    .fade-in { animation: fadeIn 0.4s ease-out forwards; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    .fade-in { animation: fadeIn 0.5s ease-out forwards; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
     
-    .feature-list { text-align: left; }
+    .feature-list { text-align: left; position: relative; z-index: 1; }
     .feature-list .item {
       display: flex;
-      gap: 12px;
-      padding: 12px 0;
+      gap: 14px;
+      padding: 14px 0;
       border-bottom: 1px solid var(--border);
     }
     .feature-list .item:last-child { border-bottom: none; }
-    .feature-list .icon { color: var(--primary); flex-shrink: 0; margin-top: 2px; }
-    .feature-list .title { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
+    .feature-list .icon { color: var(--primary); flex-shrink: 0; margin-top: 2px; font-size: 20px; }
+    .feature-list .title { font-weight: 600; font-size: 14px; margin-bottom: 2px; color: var(--text-main); }
     .feature-list .desc { color: var(--text-muted); font-size: 13px; line-height: 1.5; }
     
     .back-btn {
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      margin-top: 16px;
-      padding: 10px 20px;
-      background: rgba(255,255,255,0.05);
+      margin-top: 20px;
+      padding: 12px 24px;
+      background: rgba(212, 175, 55, 0.08);
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 12px;
       color: var(--text-main);
       font-weight: 600;
       font-size: 13px;
@@ -618,19 +663,38 @@ app.get('/', (req, res) => {
       transition: all 0.2s;
       width: 100%;
       justify-content: center;
+      position: relative;
+      z-index: 1;
     }
-    .back-btn:hover { border-color: var(--primary); color: var(--primary); }
+    .back-btn:hover { border-color: var(--primary); color: var(--primary); background: rgba(212, 175, 55, 0.12); }
     
     .terms-content {
       max-height: 300px;
       overflow-y: auto;
       text-align: left;
       padding-right: 10px;
+      position: relative;
+      z-index: 1;
     }
     .terms-content::-webkit-scrollbar { width: 4px; }
-    .terms-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-    .terms-content h4 { color: var(--text-main); margin: 16px 0 6px; font-size: 14px; }
+    .terms-content::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
+    .terms-content h4 { color: var(--primary); margin: 16px 0 6px; font-size: 14px; }
     .terms-content p { color: var(--text-muted); font-size: 13px; line-height: 1.6; margin-bottom: 12px; }
+    
+    .gold-badge {
+      display: inline-block;
+      padding: 4px 14px;
+      border: 1px solid var(--primary);
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--primary);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+      position: relative;
+      z-index: 1;
+    }
   </style>
 </head>
 <body>
@@ -642,8 +706,9 @@ app.get('/', (req, res) => {
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 7v4m8-4v4"></path>
         </svg>
       </div>
+      <div class="gold-badge">✦ Premium Protection ✦</div>
       <h1>Karma <span>Protection</span></h1>
-      <p>Authenticates your hardware and scripts.</p>
+      <p class="subtitle">HWID-locked key system with gold-standard security</p>
       <a href="/api/auth/discord" class="btn-discord">
         <svg viewBox="0 0 127.14 96.36">
           <path d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.7,77.7,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.22h0C129.24,52.84,122.09,29.11,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,46,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.31,60,73.31,53s5-12.74,11.43-12.74S96.1,46,96,53,91.08,65.69,84.69,65.69Z"/>
@@ -651,32 +716,36 @@ app.get('/', (req, res) => {
         Login with Discord
       </a>
       <div class="footer-links">
-        <button onclick="showView('features')">Features</button>
-        <button onclick="showView('terms')">Terms</button>
+        <button onclick="showView('features')">✦ Features</button>
+        <button onclick="showView('terms')">📜 Terms</button>
       </div>
     </div>
 
     <div id="features-view" class="glass-card hidden">
-      <h2 style="text-align:left;font-size:18px;margin-bottom:16px;">Protection Systems</h2>
+      <h2 style="text-align:left;font-size:20px;margin-bottom:16px;color:var(--primary);">✦ Protection Systems</h2>
       <div class="feature-list">
         <div class="item">
           <div class="icon">🔐</div>
-          <div><div class="title">Self-Decrypting Architecture</div><div class="desc">Your script dynamically self-decrypts at runtime using proprietary instructions, making reverse engineering nearly impossible.</div></div>
+          <div><div class="title">Self-Decrypting Architecture</div><div class="desc">Your script dynamically self-decrypts at runtime using proprietary instructions.</div></div>
         </div>
         <div class="item">
           <div class="icon">🔑</div>
-          <div><div class="title">Key & License Manager</div><div class="desc">Generate keys tied to HWID, manage authorized users, and enforce bans from the panel.</div></div>
+          <div><div class="title">HWID Locked Key System</div><div class="desc">Keys bind to hardware IDs. Reset available with 24h cooldown.</div></div>
         </div>
         <div class="item">
           <div class="icon">🛡️</div>
-          <div><div class="title">Anti-Dump Hardening</div><div class="desc">Detects dumping tools mid-run and refuses to reveal your code.</div></div>
+          <div><div class="title">Anti-Dump Hardening</div><div class="desc">Detects dumping tools and refuses to reveal your code.</div></div>
+        </div>
+        <div class="item">
+          <div class="icon">👥</div>
+          <div><div class="title">Whitelist Management</div><div class="desc">Auto-generate keys when whitelisting users.</div></div>
         </div>
       </div>
       <button class="back-btn" onclick="showView('login')">← Return to Login</button>
     </div>
 
     <div id="terms-view" class="glass-card hidden">
-      <h2 style="text-align:left;font-size:18px;margin-bottom:16px;">Legal Terms</h2>
+      <h2 style="text-align:left;font-size:18px;margin-bottom:16px;color:var(--primary);">Legal Terms</h2>
       <div class="terms-content">
         <h4>1. Acceptance of Service</h4>
         <p>By using our services, you agree to these terms. If you do not agree, do not use the panel.</p>
@@ -695,9 +764,9 @@ app.get('/', (req, res) => {
 
   <script>
     function showView(view) {
-      const views = ['login', 'features', 'terms'];
-      views.forEach(id => {
-        const el = document.getElementById(id + '-view');
+      var views = ['login', 'features', 'terms'];
+      views.forEach(function(id) {
+        var el = document.getElementById(id + '-view');
         if (id === view) {
           el.classList.remove('hidden');
           el.classList.add('fade-in');
@@ -714,27 +783,30 @@ app.get('/', (req, res) => {
 
 app.get('/dashboard', requireAuth, (req, res) => {
   const user = req.session.user;
+  const escapedUsername = escapeHtml(user.global_name || user.username);
+  const avatarUrl = user.avatar ? 'https://cdn.discordapp.com/avatars/' + user.discord_id + '/' + user.avatar + '.png?size=128' : 'https://cdn.discordapp.com/embed/avatars/0.png';
   
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Karma Protection | Dashboard</title>
+  <title>Karma Protection | Gold Dashboard</title>
   <style>
     :root {
-      --bg-color: #09090b;
-      --card-bg: rgba(18, 18, 20, 0.65);
+      --bg-color: #0a0a0a;
+      --card-bg: rgba(18, 18, 20, 0.85);
       --primary: #d4af37;
-      --primary-hover: #e3c94a;
+      --primary-hover: #e8c84a;
+      --primary-gradient: linear-gradient(135deg, #d4af37, #f5d76e, #d4af37);
       --discord: #5865F2;
       --danger: #ef4444;
       --success: #10b981;
       --warning: #f59e0b;
       --text-main: #f8fafc;
-      --text-muted: #9ca3af;
-      --border: rgba(255, 255, 255, 0.08);
-      --glow: rgba(212, 175, 55, 0.15);
+      --text-muted: #b0a8a0;
+      --border: rgba(212, 175, 55, 0.15);
+      --glow: rgba(212, 175, 55, 0.12);
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -742,6 +814,7 @@ app.get('/dashboard', requireAuth, (req, res) => {
       background: var(--bg-color);
       color: var(--text-main);
       min-height: 100vh;
+      background-image: radial-gradient(ellipse at 50% 0%, rgba(212, 175, 55, 0.04) 0%, transparent 70%);
     }
     .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
     
@@ -764,7 +837,12 @@ app.get('/dashboard', requireAuth, (req, res) => {
       align-items: center;
       gap: 10px;
     }
-    .topbar .brand span { color: var(--primary); }
+    .topbar .brand span { 
+      background: var(--primary-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
     .topbar .user {
       display: flex;
       align-items: center;
@@ -775,7 +853,7 @@ app.get('/dashboard', requireAuth, (req, res) => {
       height: 36px;
       border-radius: 50%;
       object-fit: cover;
-      border: 2px solid var(--border);
+      border: 2px solid var(--primary);
     }
     .topbar .username { font-weight: 600; font-size: 14px; }
     .topbar .logout {
@@ -811,10 +889,11 @@ app.get('/dashboard', requireAuth, (req, res) => {
       transition: all 0.2s;
       margin-bottom: 4px;
     }
-    .sidebar .nav-item:hover { background: rgba(255,255,255,0.05); color: white; }
+    .sidebar .nav-item:hover { background: rgba(212, 175, 55, 0.08); color: white; }
     .sidebar .nav-item.active {
-      background: var(--glow);
+      background: rgba(212, 175, 55, 0.12);
       color: var(--primary);
+      border: 1px solid rgba(212, 175, 55, 0.2);
     }
     .sidebar .nav-label {
       font-size: 11px;
@@ -833,8 +912,10 @@ app.get('/dashboard', requireAuth, (req, res) => {
       border-radius: 16px;
       padding: 24px;
       margin-bottom: 20px;
+      box-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
     }
     .card h2 { font-size: 20px; font-weight: 800; margin-bottom: 4px; }
+    .card h2 span { color: var(--primary); }
     .card .sub { color: var(--text-muted); font-size: 14px; margin-bottom: 16px; }
     
     .stats-grid {
@@ -844,18 +925,27 @@ app.get('/dashboard', requireAuth, (req, res) => {
       margin-top: 16px;
     }
     .stat {
-      background: rgba(0,0,0,0.2);
+      background: rgba(0,0,0,0.3);
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 16px;
       text-align: center;
+      transition: all 0.3s;
     }
-    .stat .num { font-size: 28px; font-weight: 900; color: var(--primary); }
+    .stat:hover { border-color: var(--primary); box-shadow: 0 0 30px rgba(212, 175, 55, 0.05); }
+    .stat .num { 
+      font-size: 28px; 
+      font-weight: 900; 
+      background: var(--primary-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
     .stat .label { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
     
     input, textarea, select {
       width: 100%;
-      background: rgba(0,0,0,0.3);
+      background: rgba(0,0,0,0.4);
       border: 1px solid var(--border);
       color: var(--text-main);
       padding: 12px 16px;
@@ -871,7 +961,7 @@ app.get('/dashboard', requireAuth, (req, res) => {
       box-shadow: 0 0 0 3px var(--glow);
     }
     textarea { min-height: 120px; font-family: monospace; resize: vertical; }
-    select { appearance: none; background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%239ca3af%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22/%3E%3C/svg%3E");
+    select { appearance: none; background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23d4af37%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22/%3E%3C/svg%3E");
     background-repeat: no-repeat; background-position: right 16px top 50%; background-size: 12px auto; }
     
     .btn {
@@ -887,21 +977,33 @@ app.get('/dashboard', requireAuth, (req, res) => {
       transition: all 0.2s;
       border: none;
     }
-    .btn-primary { background: var(--primary); color: #000; box-shadow: 0 4px 12px rgba(212,175,55,0.3); }
-    .btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); }
-    .btn-danger { background: rgba(239,68,68,0.1); color: var(--danger); border: 1px solid rgba(239,68,68,0.2); }
+    .btn-primary { 
+      background: var(--primary-gradient); 
+      color: #0a0a0a; 
+      box-shadow: 0 4px 20px rgba(212, 175, 55, 0.25);
+      font-weight: 700;
+    }
+    .btn-primary:hover { 
+      transform: translateY(-2px); 
+      box-shadow: 0 8px 30px rgba(212, 175, 55, 0.35);
+    }
+    .btn-danger { background: rgba(239,68,68,0.12); color: var(--danger); border: 1px solid rgba(239,68,68,0.2); }
     .btn-danger:hover { background: rgba(239,68,68,0.2); }
-    .btn-success { background: rgba(16,185,129,0.1); color: var(--success); border: 1px solid rgba(16,185,129,0.2); }
+    .btn-success { background: rgba(16,185,129,0.12); color: var(--success); border: 1px solid rgba(16,185,129,0.2); }
     .btn-success:hover { background: rgba(16,185,129,0.2); }
-    .btn-outline { background: rgba(0,0,0,0.2); border: 1px solid var(--border); color: var(--text-main); }
-    .btn-outline:hover { border-color: var(--primary); color: var(--primary); }
+    .btn-outline { 
+      background: rgba(0,0,0,0.2); 
+      border: 1px solid var(--border); 
+      color: var(--text-main); 
+    }
+    .btn-outline:hover { border-color: var(--primary); color: var(--primary); background: rgba(212, 175, 55, 0.05); }
     
     .checkbox-container {
       display: flex;
       align-items: center;
       gap: 10px;
       padding: 10px 14px;
-      background: rgba(0,0,0,0.2);
+      background: rgba(0,0,0,0.3);
       border: 1px solid var(--border);
       border-radius: 10px;
       cursor: pointer;
@@ -910,8 +1012,8 @@ app.get('/dashboard', requireAuth, (req, res) => {
       transition: all 0.2s;
       width: fit-content;
     }
-    .checkbox-container:hover { border-color: var(--warning); color: var(--warning); }
-    .checkbox-container input { width: 16px; height: 16px; cursor: pointer; accent-color: var(--warning); margin: 0; }
+    .checkbox-container:hover { border-color: var(--primary); color: var(--primary); }
+    .checkbox-container input { width: 16px; height: 16px; cursor: pointer; accent-color: var(--primary); margin: 0; }
     
     .scripts-grid {
       display: grid;
@@ -919,13 +1021,13 @@ app.get('/dashboard', requireAuth, (req, res) => {
       gap: 16px;
     }
     .script-card {
-      background: rgba(0,0,0,0.2);
+      background: rgba(0,0,0,0.3);
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 16px;
       transition: all 0.3s;
     }
-    .script-card:hover { border-color: rgba(255,255,255,0.15); transform: translateY(-2px); }
+    .script-card:hover { border-color: var(--primary); transform: translateY(-3px); box-shadow: 0 8px 30px rgba(0,0,0,0.3); }
     .script-card .title { font-weight: 600; font-size: 15px; margin-bottom: 8px; }
     .script-card .meta { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }
     .script-card .actions { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -938,16 +1040,18 @@ app.get('/dashboard', requireAuth, (req, res) => {
       font-size: 11px;
       font-weight: 600;
     }
-    .badge-success { background: rgba(16,185,129,0.2); color: var(--success); }
-    .badge-danger { background: rgba(239,68,68,0.2); color: var(--danger); }
-    .badge-warning { background: rgba(245,158,11,0.2); color: var(--warning); }
-    .badge-primary { background: rgba(212,175,55,0.2); color: var(--primary); }
+    .badge-success { background: rgba(16,185,129,0.15); color: var(--success); border: 1px solid rgba(16,185,129,0.15); }
+    .badge-danger { background: rgba(239,68,68,0.15); color: var(--danger); border: 1px solid rgba(239,68,68,0.15); }
+    .badge-warning { background: rgba(245,158,11,0.15); color: var(--warning); border: 1px solid rgba(245,158,11,0.15); }
+    .badge-primary { background: rgba(212, 175, 55, 0.15); color: var(--primary); border: 1px solid rgba(212, 175, 55, 0.15); }
     
     .view-section { display: none; }
     .view-section.active { display: block; animation: fadeIn 0.3s ease; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     
     .actions-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+    
+    .gold-text { color: var(--primary); }
     
     @media (max-width: 768px) {
       .dashboard { grid-template-columns: 1fr; }
@@ -964,19 +1068,20 @@ app.get('/dashboard', requireAuth, (req, res) => {
   <header class="topbar">
     <div class="brand">⚡ Karma <span>Protection</span></div>
     <div class="user">
-      <span class="username">${escapeHtml(user.global_name || user.username)}</span>
-      <img class="avatar" src="${user.avatar ? 'https://cdn.discordapp.com/avatars/' + user.discord_id + '/' + user.avatar + '.png?size=128' : 'https://cdn.discordapp.com/embed/avatars/0.png'}" alt="Avatar">
+      <span class="username">${escapedUsername}</span>
+      <img class="avatar" src="${avatarUrl}" alt="Avatar">
       <span class="logout" onclick="window.location.href='/logout'">Logout</span>
     </div>
   </header>
   
   <div class="dashboard">
     <aside class="sidebar" id="sidebar">
-      <div class="nav-label">Navigation</div>
+      <div class="nav-label">✦ Navigation</div>
       <div class="nav-item active" onclick="switchView('overview', this)">📊 Overview</div>
       <div class="nav-item" onclick="switchView('scripts', this)">📄 Scripts</div>
       <div class="nav-item" onclick="switchView('panels', this)">📋 Panels</div>
       <div class="nav-item" onclick="switchView('keys', this)">🔑 Keys</div>
+      <div class="nav-item" onclick="switchView('whitelist', this)">👥 Whitelist</div>
       <div class="nav-item" onclick="switchView('hwids', this)">🚫 HWID Bans</div>
     </aside>
     
@@ -984,12 +1089,13 @@ app.get('/dashboard', requireAuth, (req, res) => {
       <!-- Overview -->
       <div id="view-overview" class="view-section active">
         <div class="card">
-          <h2>Welcome, ${escapeHtml(user.global_name || user.username)}</h2>
+          <h2>Welcome, <span>${escapedUsername}</span></h2>
           <p class="sub">Manage your scripts, panels, and keys from one place.</p>
           <div class="stats-grid" id="statsGrid">
             <div class="stat"><div class="num" id="statScripts">0</div><div class="label">Scripts</div></div>
             <div class="stat"><div class="num" id="statPanels">0</div><div class="label">Panels</div></div>
             <div class="stat"><div class="num" id="statKeys">0</div><div class="label">Keys</div></div>
+            <div class="stat"><div class="num" id="statWhitelist">0</div><div class="label">Whitelisted</div></div>
             <div class="stat"><div class="num" id="statBanned">0</div><div class="label">Banned HWIDs</div></div>
           </div>
         </div>
@@ -998,7 +1104,7 @@ app.get('/dashboard', requireAuth, (req, res) => {
       <!-- Scripts -->
       <div id="view-scripts" class="view-section">
         <div class="card">
-          <h2>Your Scripts</h2>
+          <h2>Your <span>Scripts</span></h2>
           <p class="sub">Create and manage your protected scripts.</p>
           <div style="margin-bottom:16px;display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
             <input type="text" id="scriptName" placeholder="Script name" style="flex:1;min-width:200px;margin:0;">
@@ -1008,7 +1114,7 @@ app.get('/dashboard', requireAuth, (req, res) => {
             <label class="checkbox-container">
               <input type="checkbox" id="compressMode"> Compress
             </label>
-            <button class="btn btn-primary" onclick="createScript()">+ Create</button>
+            <button class="btn btn-primary" onclick="createScript()">✦ Create</button>
           </div>
           <textarea id="scriptCode" rows="8" placeholder="-- Paste your Lua code here..."></textarea>
         </div>
@@ -1018,7 +1124,7 @@ app.get('/dashboard', requireAuth, (req, res) => {
       <!-- Panels -->
       <div id="view-panels" class="view-section">
         <div class="card">
-          <h2>Discord Panels</h2>
+          <h2>Discord <span>Panels</span></h2>
           <p class="sub">Create panels to send to your Discord server.</p>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
             <input type="text" id="panelName" placeholder="Panel name">
@@ -1027,7 +1133,7 @@ app.get('/dashboard', requireAuth, (req, res) => {
           <textarea id="panelDesc" rows="3" placeholder="Panel description..."></textarea>
           <select id="panelScript"><option value="">Select script...</option></select>
           <input type="number" id="panelCooldown" placeholder="HWID cooldown (seconds)" value="180">
-          <button class="btn btn-primary" onclick="createPanel()">+ Create Panel</button>
+          <button class="btn btn-primary" onclick="createPanel()">✦ Create Panel</button>
         </div>
         <div id="panelsList" class="scripts-grid"></div>
       </div>
@@ -1035,23 +1141,32 @@ app.get('/dashboard', requireAuth, (req, res) => {
       <!-- Keys -->
       <div id="view-keys" class="view-section">
         <div class="card">
-          <h2>Generate Keys</h2>
+          <h2>Generate <span>Keys</span></h2>
           <p class="sub">Generate license keys for your panels.</p>
           <select id="keyPanel"><option value="">Select panel...</option></select>
           <input type="number" id="keyDuration" placeholder="Duration (hours, 0 = permanent)" value="0">
           <input type="text" id="keyNote" placeholder="Note (optional)">
           <div class="actions-row">
-            <button class="btn btn-primary" onclick="generateKey()">Generate Key</button>
+            <button class="btn btn-primary" onclick="generateKey()">✦ Generate Key</button>
             <button class="btn btn-outline" onclick="addTimeAll()">+ Add Time to All</button>
           </div>
         </div>
         <div id="keysList" class="scripts-grid"></div>
       </div>
       
+      <!-- Whitelist -->
+      <div id="view-whitelist" class="view-section">
+        <div class="card">
+          <h2>Whitelist <span>Management</span></h2>
+          <p class="sub">Users you've whitelisted with auto-generated keys.</p>
+        </div>
+        <div id="whitelistList" class="scripts-grid"></div>
+      </div>
+      
       <!-- HWIDs -->
       <div id="view-hwids" class="view-section">
         <div class="card">
-          <h2>Ban HWID</h2>
+          <h2>Ban <span>HWID</span></h2>
           <p class="sub">Ban a hardware ID from accessing your scripts.</p>
           <div style="display:flex;gap:12px;">
             <input type="text" id="banHwidInput" placeholder="Enter HWID to ban" style="flex:1;margin:0;">
@@ -1064,8 +1179,8 @@ app.get('/dashboard', requireAuth, (req, res) => {
   </div>
   
   <script>
-    let currentData = { scripts: [], panels: [], keys: [], bannedHWIDs: [] };
-    let serverTime = Date.now();
+    var currentData = { scripts: [], panels: [], keys: [], bannedHWIDs: [], whitelist: [] };
+    var serverTime = Date.now();
     
     function getHeaders() {
       return { 'Content-Type': 'application/json' };
@@ -1073,8 +1188,8 @@ app.get('/dashboard', requireAuth, (req, res) => {
     
     async function loadData() {
       try {
-        const res = await fetch('/api/data');
-        const data = await res.json();
+        var res = await fetch('/api/data');
+        var data = await res.json();
         if (data.error) return;
         
         currentData = data;
@@ -1088,6 +1203,7 @@ app.get('/dashboard', requireAuth, (req, res) => {
       renderScripts();
       renderPanels();
       renderKeys();
+      renderWhitelist();
       renderHwids();
       updateSelects();
     }
@@ -1096,129 +1212,184 @@ app.get('/dashboard', requireAuth, (req, res) => {
       document.getElementById('statScripts').textContent = currentData.scripts.length;
       document.getElementById('statPanels').textContent = currentData.panels.length;
       document.getElementById('statKeys').textContent = currentData.keys.length;
+      document.getElementById('statWhitelist').textContent = currentData.whitelist ? currentData.whitelist.length : 0;
       document.getElementById('statBanned').textContent = currentData.bannedHWIDs.length;
     }
     
     function renderScripts() {
-      const container = document.getElementById('scriptsList');
+      var container = document.getElementById('scriptsList');
       if (currentData.scripts.length === 0) {
         container.innerHTML = '<div style="grid-column:1/-1;padding:30px;text-align:center;color:var(--text-muted);background:rgba(0,0,0,0.2);border-radius:12px;border:1px dashed var(--border);">No scripts yet. Create one above.</div>';
         return;
       }
-      container.innerHTML = currentData.scripts.map(s => `
-        <div class="script-card">
-          <div class="title">${escapeHtml(s.name)}</div>
-          <div class="meta">
-            <span class="badge ${s.status === 'active' ? 'badge-success' : 'badge-danger'}">${s.status === 'active' ? 'Active' : 'Disabled'}</span>
-            ${s.ffa_mode ? '<span class="badge badge-warning">FFA</span>' : ''}
-            ${s.compress_mode ? '<span class="badge badge-primary">Compressed</span>' : ''}
-            <span style="margin-left:8px;">${new Date(s.created_at).toLocaleDateString()}</span>
-          </div>
-          <div class="actions">
-            <button class="btn btn-outline" onclick="toggleScript('${s.id}')">${s.status === 'active' ? 'Disable' : 'Enable'}</button>
-            <button class="btn btn-outline" onclick="toggleFfa('${s.id}')">${s.ffa_mode ? 'Disable FFA' : 'Enable FFA'}</button>
-            <button class="btn btn-danger" onclick="deleteScript('${s.id}')">Delete</button>
-          </div>
-        </div>
-      `).join('');
+      var html = '';
+      for (var i = 0; i < currentData.scripts.length; i++) {
+        var s = currentData.scripts[i];
+        var statusBadge = s.status === 'active' ? 'badge-success' : 'badge-danger';
+        var statusText = s.status === 'active' ? 'Active' : 'Disabled';
+        var ffaBadge = s.ffa_mode ? '<span class="badge badge-warning">FFA</span>' : '';
+        var compressBadge = s.compress_mode ? '<span class="badge badge-primary">Compressed</span>' : '';
+        var toggleText = s.status === 'active' ? 'Disable' : 'Enable';
+        var ffaText = s.ffa_mode ? 'Disable FFA' : 'Enable FFA';
+        var date = new Date(s.created_at).toLocaleDateString();
+        html += '<div class="script-card">' +
+          '  <div class="title">' + escapeHtml(s.name) + '</div>' +
+          '  <div class="meta">' +
+          '    <span class="badge ' + statusBadge + '">' + statusText + '</span>' +
+          '    ' + ffaBadge + ' ' + compressBadge +
+          '    <span style="margin-left:8px;">' + date + '</span>' +
+          '  </div>' +
+          '  <div class="actions">' +
+          '    <button class="btn btn-outline" onclick="toggleScript(\'' + s.id + '\')">' + toggleText + '</button>' +
+          '    <button class="btn btn-outline" onclick="toggleFfa(\'' + s.id + '\')">' + ffaText + '</button>' +
+          '    <button class="btn btn-danger" onclick="deleteScript(\'' + s.id + '\')">Delete</button>' +
+          '  </div>' +
+          '</div>';
+      }
+      container.innerHTML = html;
     }
     
     function renderPanels() {
-      const container = document.getElementById('panelsList');
+      var container = document.getElementById('panelsList');
       if (currentData.panels.length === 0) {
         container.innerHTML = '<div style="grid-column:1/-1;padding:30px;text-align:center;color:var(--text-muted);background:rgba(0,0,0,0.2);border-radius:12px;border:1px dashed var(--border);">No panels yet. Create one above.</div>';
         return;
       }
-      container.innerHTML = currentData.panels.map(p => `
-        <div class="script-card">
-          <div class="title">${escapeHtml(p.name)}</div>
-          <div class="meta">${escapeHtml(p.description || 'No description')}</div>
-          <div class="actions">
-            <button class="btn btn-success" onclick="sendPanel('${p.id}')">Send to Discord</button>
-            <button class="btn btn-danger" onclick="deletePanel('${p.id}')">Delete</button>
-          </div>
-        </div>
-      `).join('');
+      var html = '';
+      for (var i = 0; i < currentData.panels.length; i++) {
+        var p = currentData.panels[i];
+        var desc = p.description || 'No description';
+        html += '<div class="script-card">' +
+          '  <div class="title">' + escapeHtml(p.name) + '</div>' +
+          '  <div class="meta">' + escapeHtml(desc) + '</div>' +
+          '  <div class="actions">' +
+          '    <button class="btn btn-success" onclick="sendPanel(\'' + p.id + '\')">Send to Discord</button>' +
+          '    <button class="btn btn-danger" onclick="deletePanel(\'' + p.id + '\')">Delete</button>' +
+          '  </div>' +
+          '</div>';
+      }
+      container.innerHTML = html;
     }
     
     function renderKeys() {
-      const container = document.getElementById('keysList');
+      var container = document.getElementById('keysList');
       if (currentData.keys.length === 0) {
         container.innerHTML = '<div style="grid-column:1/-1;padding:30px;text-align:center;color:var(--text-muted);background:rgba(0,0,0,0.2);border-radius:12px;border:1px dashed var(--border);">No keys generated yet.</div>';
         return;
       }
-      container.innerHTML = currentData.keys.map(k => {
-        const isExpired = k.expires_at && new Date(k.expires_at).getTime() < serverTime;
-        let status = 'Active';
-        let badgeClass = 'badge-success';
+      var html = '';
+      for (var i = 0; i < currentData.keys.length; i++) {
+        var k = currentData.keys[i];
+        var isExpired = k.expires_at && new Date(k.expires_at).getTime() < serverTime;
+        var status = 'Active';
+        var badgeClass = 'badge-success';
         if (isExpired) { status = 'Expired'; badgeClass = 'badge-danger'; }
-        else if (k.hwid) { status = 'HWID Locked'; badgeClass = 'badge-warning'; }
-        
-        return `
-          <div class="script-card">
-            <div class="title" style="font-family:monospace;font-size:13px;">${escapeHtml(k.key)}</div>
-            <div class="meta">
-              <span class="badge ${badgeClass}">${status}</span>
-              ${k.note ? `<span style="margin-left:8px;">${escapeHtml(k.note)}</span>` : ''}
-            </div>
-            <div class="actions">
-              <button class="btn btn-danger" onclick="deleteKey('${k.key}')">Delete</button>
-            </div>
-          </div>
-        `;
-      }).join('');
+        else if (k.hwid) { status = '🔒 HWID Locked'; badgeClass = 'badge-warning'; }
+        var noteHtml = k.note ? '<span style="margin-left:8px;">' + escapeHtml(k.note) + '</span>' : '';
+        html += '<div class="script-card">' +
+          '  <div class="title" style="font-family:monospace;font-size:13px;color:var(--primary);">' + escapeHtml(k.key) + '</div>' +
+          '  <div class="meta">' +
+          '    <span class="badge ' + badgeClass + '">' + status + '</span>' +
+          '    ' + noteHtml +
+          '  </div>' +
+          '  <div class="actions">' +
+          '    <button class="btn btn-danger" onclick="deleteKey(\'' + k.key + '\')">Delete</button>' +
+          '  </div>' +
+          '</div>';
+      }
+      container.innerHTML = html;
+    }
+    
+    function renderWhitelist() {
+      var container = document.getElementById('whitelistList');
+      var wl = currentData.whitelist || [];
+      if (wl.length === 0) {
+        container.innerHTML = '<div style="grid-column:1/-1;padding:30px;text-align:center;color:var(--text-muted);background:rgba(0,0,0,0.2);border-radius:12px;border:1px dashed var(--border);">No users whitelisted yet.</div>';
+        return;
+      }
+      var html = '';
+      for (var i = 0; i < wl.length; i++) {
+        var w = wl[i];
+        var isExpired = w.expires_at && new Date(w.expires_at).getTime() < serverTime;
+        var status = isExpired ? '⛔ Expired' : '✅ Active';
+        var hwidStatus = w.hwid ? '🔒 HWID Set' : '🔓 No HWID';
+        html += '<div class="script-card">' +
+          '  <div class="title">👤 ' + escapeHtml(w.username || w.discord_id) + '</div>' +
+          '  <div class="meta">' +
+          '    <span class="badge badge-primary">' + status + '</span>' +
+          '    <span class="badge badge-warning">' + hwidStatus + '</span>' +
+          '    <span style="margin-left:8px;">Key: ' + escapeHtml(w.key) + '</span>' +
+          '  </div>' +
+          '  <div class="actions">' +
+          '    <button class="btn btn-outline" onclick="removeWhitelist(\'' + w.id + '\')">Remove</button>' +
+          '  </div>' +
+          '</div>';
+      }
+      container.innerHTML = html;
     }
     
     function renderHwids() {
-      const container = document.getElementById('hwidsList');
+      var container = document.getElementById('hwidsList');
       if (currentData.bannedHWIDs.length === 0) {
         container.innerHTML = '<div style="grid-column:1/-1;padding:30px;text-align:center;color:var(--text-muted);background:rgba(0,0,0,0.2);border-radius:12px;border:1px dashed var(--border);">No banned HWIDs.</div>';
         return;
       }
-      container.innerHTML = currentData.bannedHWIDs.map(h => `
-        <div class="script-card">
-          <div class="title" style="font-family:monospace;font-size:13px;">${escapeHtml(h.hwid)}</div>
-          <div class="meta">Banned ${new Date(h.created_at).toLocaleDateString()}</div>
-          <div class="actions">
-            <button class="btn btn-outline" onclick="unbanHwid('${h.hwid}')">Unban</button>
-          </div>
-        </div>
-      `).join('');
+      var html = '';
+      for (var i = 0; i < currentData.bannedHWIDs.length; i++) {
+        var h = currentData.bannedHWIDs[i];
+        var date = new Date(h.created_at).toLocaleDateString();
+        html += '<div class="script-card">' +
+          '  <div class="title" style="font-family:monospace;font-size:13px;color:var(--danger);">🚫 ' + escapeHtml(h.hwid) + '</div>' +
+          '  <div class="meta">Banned ' + date + '</div>' +
+          '  <div class="actions">' +
+          '    <button class="btn btn-outline" onclick="unbanHwid(\'' + h.hwid + '\')">Unban</button>' +
+          '  </div>' +
+          '</div>';
+      }
+      container.innerHTML = html;
     }
     
     function updateSelects() {
-      const panelScript = document.getElementById('panelScript');
+      var panelScript = document.getElementById('panelScript');
       panelScript.innerHTML = '<option value="">Select script...</option>';
-      currentData.scripts.forEach(s => {
-        panelScript.innerHTML += `<option value="${s.id}">${escapeHtml(s.name)}</option>`;
-      });
+      for (var i = 0; i < currentData.scripts.length; i++) {
+        var s = currentData.scripts[i];
+        panelScript.innerHTML += '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>';
+      }
       
-      const keyPanel = document.getElementById('keyPanel');
+      var keyPanel = document.getElementById('keyPanel');
       keyPanel.innerHTML = '<option value="">Select panel...</option>';
-      currentData.panels.forEach(p => {
-        keyPanel.innerHTML += `<option value="${p.id}">${escapeHtml(p.name)}</option>`;
-      });
+      for (var i = 0; i < currentData.panels.length; i++) {
+        var p = currentData.panels[i];
+        keyPanel.innerHTML += '<option value="' + p.id + '">' + escapeHtml(p.name) + '</option>';
+      }
     }
     
     function switchView(view, el) {
-      document.querySelectorAll('.view-section').forEach(v => v.classList.remove('active'));
-      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      var sections = document.querySelectorAll('.view-section');
+      for (var i = 0; i < sections.length; i++) {
+        sections[i].classList.remove('active');
+      }
+      var navItems = document.querySelectorAll('.nav-item');
+      for (var i = 0; i < navItems.length; i++) {
+        navItems[i].classList.remove('active');
+      }
       document.getElementById('view-' + view).classList.add('active');
       if (el) el.classList.add('active');
     }
     
     // Script functions
     async function createScript() {
-      const name = document.getElementById('scriptName').value.trim();
-      const code = document.getElementById('scriptCode').value;
-      const compressMode = document.getElementById('compressMode').checked;
+      var name = document.getElementById('scriptName').value.trim();
+      var code = document.getElementById('scriptCode').value;
+      var compressMode = document.getElementById('compressMode').checked;
       
       if (!name || !code) return alert('Please enter a name and code.');
       
       await fetch('/api/create-script', {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify({ name, code, compressMode })
+        body: JSON.stringify({ name: name, code: code, compressMode: compressMode })
       });
       
       document.getElementById('scriptName').value = '';
@@ -1243,25 +1414,25 @@ app.get('/dashboard', requireAuth, (req, res) => {
       await fetch('/api/delete-script', {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify({ id })
+        body: JSON.stringify({ id: id })
       });
       loadData();
     }
     
     // Panel functions
     async function createPanel() {
-      const name = document.getElementById('panelName').value.trim();
-      const description = document.getElementById('panelDesc').value;
-      const channelId = document.getElementById('panelChannel').value.trim();
-      const scriptId = document.getElementById('panelScript').value;
-      const hwidCooldown = parseInt(document.getElementById('panelCooldown').value) || 180;
+      var name = document.getElementById('panelName').value.trim();
+      var description = document.getElementById('panelDesc').value;
+      var channelId = document.getElementById('panelChannel').value.trim();
+      var scriptId = document.getElementById('panelScript').value;
+      var hwidCooldown = parseInt(document.getElementById('panelCooldown').value) || 180;
       
       if (!name || !channelId || !scriptId) return alert('Please fill in all required fields.');
       
       await fetch('/api/create-panel', {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify({ name, description, channelId, scriptId, hwidCooldown })
+        body: JSON.stringify({ name: name, description: description, channelId: channelId, scriptId: scriptId, hwidCooldown: hwidCooldown })
       });
       
       document.getElementById('panelName').value = '';
@@ -1285,23 +1456,23 @@ app.get('/dashboard', requireAuth, (req, res) => {
       await fetch('/api/delete-panel', {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify({ id })
+        body: JSON.stringify({ id: id })
       });
       loadData();
     }
     
     // Key functions
     async function generateKey() {
-      const panelId = document.getElementById('keyPanel').value;
-      const durationHours = parseInt(document.getElementById('keyDuration').value) || 0;
-      const note = document.getElementById('keyNote').value.trim();
+      var panelId = document.getElementById('keyPanel').value;
+      var durationHours = parseInt(document.getElementById('keyDuration').value) || 0;
+      var note = document.getElementById('keyNote').value.trim();
       
       if (!panelId) return alert('Please select a panel.');
       
       await fetch('/api/generate-key', {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify({ panelId, durationHours, note })
+        body: JSON.stringify({ panelId: panelId, durationHours: durationHours, note: note })
       });
       
       document.getElementById('keyNote').value = '';
@@ -1313,13 +1484,13 @@ app.get('/dashboard', requireAuth, (req, res) => {
       await fetch('/api/delete-key', {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify({ key })
+        body: JSON.stringify({ key: key })
       });
       loadData();
     }
     
     async function addTimeAll() {
-      const hours = prompt('How many hours to add to all keys?');
+      var hours = prompt('How many hours to add to all keys?');
       if (!hours || isNaN(hours)) return;
       await fetch('/api/add-time-all', {
         method: 'POST',
@@ -1329,14 +1500,25 @@ app.get('/dashboard', requireAuth, (req, res) => {
       loadData();
     }
     
+    // Whitelist functions
+    async function removeWhitelist(id) {
+      if (!confirm('Remove this user from whitelist?')) return;
+      await fetch('/api/delete-whitelist', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ id: id })
+      });
+      loadData();
+    }
+    
     // HWID functions
     async function banHwid() {
-      const hwid = document.getElementById('banHwidInput').value.trim();
+      var hwid = document.getElementById('banHwidInput').value.trim();
       if (!hwid) return alert('Enter an HWID to ban.');
       await fetch('/api/ban-hwid', {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify({ hwid })
+        body: JSON.stringify({ hwid: hwid })
       });
       document.getElementById('banHwidInput').value = '';
       loadData();
@@ -1347,13 +1529,13 @@ app.get('/dashboard', requireAuth, (req, res) => {
       await fetch('/api/unban-hwid', {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify({ hwid })
+        body: JSON.stringify({ hwid: hwid })
       });
       loadData();
     }
     
     function escapeHtml(text) {
-      const div = document.createElement('div');
+      var div = document.createElement('div');
       div.textContent = text;
       return div.innerHTML;
     }
@@ -1365,8 +1547,30 @@ app.get('/dashboard', requireAuth, (req, res) => {
 </html>`);
 });
 
+// ---------------- Delete Whitelist API ----------------
+app.post('/api/delete-whitelist', (req, res) => {
+  const user = getSessionUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  
+  const { id } = req.body;
+  if (!id) return res.status(400).json({ error: 'ID required' });
+  
+  // Get the whitelist entry to get the key
+  const entry = db.prepare('SELECT * FROM whitelist WHERE id = ? AND user_id = ?').get(id, user.id);
+  if (!entry) return res.status(404).json({ error: 'Whitelist entry not found' });
+  
+  // Delete from whitelist
+  db.prepare('DELETE FROM whitelist WHERE id = ? AND user_id = ?').run(id, user.id);
+  
+  // Also delete the associated key
+  db.prepare('DELETE FROM keys WHERE key = ? AND user_id = ?').run(entry.key, user.id);
+  
+  res.json({ success: true });
+});
+
+// ---------------- Health Check ----------------
 app.get('/health', (req, res) => {
-  res.json({ ok: true, name: 'Karma Protection v6.3' });
+  res.json({ ok: true, name: 'Karma Protection v6.5 Gold' });
 });
 
 // ---------------- Discord Bot ----------------
@@ -1380,12 +1584,12 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message],
   presence: {
     status: PresenceUpdateStatus.Online,
-    activities: [{ name: '/help | Karma Hosting', type: ActivityType.Watching }],
+    activities: [{ name: '✨ Gold Protection | /help', type: ActivityType.Watching }],
   },
 });
 
 client.once('ready', () => {
-  console.log(`✅ Karma Bot online as ${client.user.tag}`);
+  console.log(`✨ Karma Gold Bot online as ${client.user.tag}`);
 });
 
 // ---------------- Message Commands ----------------
@@ -1403,29 +1607,183 @@ client.on('messageCreate', async (msg) => {
     if (cmd === 'help') {
       const helpEmbed = new EmbedBuilder()
         .setColor(BRAND_COLOR)
-        .setTitle('Karma Hosting - Commands')
+        .setTitle('✨ Karma Gold - Commands')
         .setDescription([
-          '**Commands**',
+          '**✦ General Commands**',
           `${PREFIX}setup - Create account or view info`,
-          `${PREFIX}panelsetup <script> - Spawn panel for a script`,
           `${PREFIX}scripts - List your scripts`,
-          `${PREFIX}keys <script> - List keys for a script`,
-          `${PREFIX}createkey <script> [note] [hours] - Generate a key`,
-          `${PREFIX}generate <id> <hours> [note] - Generate by script ID`,
+          `${PREFIX}keys - List all your keys`,
+          '',
+          '**✦ Key Management**',
+          `${PREFIX}createkey <script> [hours] - Generate a key`,
           `${PREFIX}revoke <key> - Revoke a key`,
           `${PREFIX}reset-hwid <key> - Reset HWID (24h cooldown)`,
-          `${PREFIX}ban <hwid> - Ban a HWID (owner only)`,
-          `${PREFIX}unban <hwid> - Unban a HWID (owner only)`
+          '',
+          '**✦ Whitelist**',
+          `${PREFIX}whitelist <script> <@user> [hours] - Whitelist with auto-key`,
+          `${PREFIX}removewhitelist <@user> - Remove from whitelist`,
+          `${PREFIX}whitelistlist - List all whitelisted users`,
+          '',
+          '**✦ Panels**',
+          `${PREFIX}panelsetup <script> - Spawn panel for a script`,
+          '',
+          '**✦ Owner Only**',
+          `${PREFIX}ban <hwid> - Ban a HWID`,
+          `${PREFIX}unban <hwid> - Unban a HWID`,
+          `${PREFIX}checkhwid <hwid> - Check if HWID is banned`
         ].join('\n'))
-        .setFooter({ text: 'Karma Hosting' })
+        .setFooter({ text: 'Karma Gold v6.5' })
         .setTimestamp();
       
       try {
         await msg.author.send({ embeds: [helpEmbed] });
-        await msg.reply({ embeds: [new EmbedBuilder().setColor(BRAND_COLOR).setTitle('✅ Help Sent').setDescription('Check your DMs.').setColor(0x22c55e)] });
+        await msg.reply({ embeds: [new EmbedBuilder().setColor(0x22c55e).setTitle('✅ Help Sent').setDescription('Check your DMs. ✨')] });
       } catch {
         await msg.reply({ embeds: [helpEmbed] });
       }
+      return;
+    }
+
+    // ============ WHITELIST COMMAND ============
+    if (cmd === 'whitelist') {
+      if (!user) return msg.reply('❌ Use /setup first.');
+      
+      const scriptName = args[0];
+      const mention = args[1];
+      const hours = parseInt(args[2]) || 0;
+      
+      if (!scriptName || !mention) {
+        return msg.reply('Usage: /whitelist <script> <@user> [hours]');
+      }
+      
+      const script = db.prepare('SELECT * FROM scripts WHERE user_id = ? AND name = ?').get(user.id, scriptName);
+      if (!script) return msg.reply(`❌ No script found matching "${scriptName}"`);
+      
+      const targetId = mention.replace(/[<@!>]/g, '');
+      if (!targetId) return msg.reply('❌ Invalid user mention.');
+      
+      let targetUser = db.prepare('SELECT * FROM users WHERE discord_id = ?').get(targetId);
+      if (!targetUser) {
+        const id = `user_${crypto.randomBytes(8).toString('hex')}`;
+        const targetMember = await msg.guild?.members.fetch(targetId).catch(() => null);
+        const username = targetMember ? targetMember.user.username : 'Unknown';
+        db.prepare(`
+          INSERT INTO users (id, discord_id, username, provider)
+          VALUES (?, ?, ?, ?)
+        `).run(id, targetId, username, 'discord');
+        targetUser = db.prepare('SELECT * FROM users WHERE discord_id = ?').get(targetId);
+      }
+      
+      const key = generateKey();
+      const expiresAt = hours > 0 ? addHours(hours) : null;
+      const id = makeId('wl');
+      
+      const existing = db.prepare('SELECT * FROM whitelist WHERE script_id = ? AND discord_id = ?').get(script.id, targetId);
+      if (existing) {
+        return msg.reply(`❌ <@${targetId}> is already whitelisted for this script.`);
+      }
+      
+      db.prepare(`
+        INSERT INTO whitelist (id, script_id, user_id, key, discord_id, username, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(id, script.id, user.id, key, targetId, targetUser.username, expiresAt);
+      
+      const keyId = makeId('key');
+      db.prepare(`
+        INSERT INTO keys (id, script_id, user_id, key, note, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(keyId, script.id, user.id, key, `Whitelisted for ${targetUser.username}`, expiresAt);
+      
+      const expiryText = hours > 0 ? `Expires in ${hours} hours` : 'Permanent';
+      
+      const embed = new EmbedBuilder()
+        .setColor(BRAND_COLOR)
+        .setTitle('✨ User Whitelisted')
+        .setDescription([
+          `**Script:** ${script.name}`,
+          `**User:** <@${targetId}> (${targetUser.username})`,
+          `**Key:** \`${key}\``,
+          `**Status:** ${expiryText}`,
+          `**HWID Lock:** Required on first use`
+        ].join('\n'))
+        .setFooter({ text: 'Karma Gold v6.5' })
+        .setTimestamp();
+      
+      await msg.reply({ embeds: [embed] });
+      
+      try {
+        const dmEmbed = new EmbedBuilder()
+          .setColor(BRAND_COLOR)
+          .setTitle('🔑 You\'ve Been Whitelisted! ✨')
+          .setDescription([
+            `**Script:** ${script.name}`,
+            `**Your Key:** \`${key}\``,
+            `**Expires:** ${hours > 0 ? formatExpiry(expiresAt) : 'Permanent'}`,
+            '',
+            '⚠️ **Important:** This key is tied to your HWID.',
+            'If you try to use it on another device, you will be kicked.',
+            'To reset HWID, use `/reset-hwid <key>` (24h cooldown)'
+          ].join('\n'))
+          .setColor(BRAND_COLOR)
+          .setFooter({ text: 'Karma Gold' })
+          .setTimestamp();
+        
+        const targetUserDM = await client.users.fetch(targetId);
+        await targetUserDM.send({ embeds: [dmEmbed] });
+      } catch (e) {
+        console.log('Could not DM user:', e);
+      }
+      return;
+    }
+
+    // ============ REMOVE WHITELIST ============
+    if (cmd === 'removewhitelist' || cmd === 'unwhitelist') {
+      if (!user) return msg.reply('❌ Use /setup first.');
+      
+      const mention = args[0];
+      if (!mention) return msg.reply('Usage: /removewhitelist <@user>');
+      
+      const targetId = mention.replace(/[<@!>]/g, '');
+      if (!targetId) return msg.reply('❌ Invalid user mention.');
+      
+      const entries = db.prepare('SELECT * FROM whitelist WHERE discord_id = ? AND user_id = ?').all(targetId, user.id);
+      if (entries.length === 0) {
+        return msg.reply(`❌ <@${targetId}> is not whitelisted on any of your scripts.`);
+      }
+      
+      for (const entry of entries) {
+        db.prepare('DELETE FROM whitelist WHERE id = ?').run(entry.id);
+        db.prepare('DELETE FROM keys WHERE key = ? AND user_id = ?').run(entry.key, user.id);
+      }
+      
+      await msg.reply(`✅ Removed <@${targetId}> from all whitelists.`);
+      return;
+    }
+
+    // ============ LIST WHITELIST ============
+    if (cmd === 'whitelistlist' || cmd === 'wllist') {
+      if (!user) return msg.reply('❌ Use /setup first.');
+      
+      const entries = db.prepare('SELECT * FROM whitelist WHERE user_id = ? ORDER BY created_at DESC').all(user.id);
+      if (entries.length === 0) {
+        return msg.reply('📋 No users whitelisted.');
+      }
+      
+      const lines = entries.map(e => {
+        const expiry = e.expires_at ? formatExpiry(e.expires_at) : 'Permanent';
+        const status = e.expires_at && new Date(e.expires_at).getTime() < Date.now() ? '⛔ Expired' : '✅ Active';
+        const hwid = e.hwid ? '🔒' : '🔓';
+        return `${status} ${hwid} <@${e.discord_id}> - ${e.username} - Expires: ${expiry}`;
+      });
+      
+      const embed = new EmbedBuilder()
+        .setColor(BRAND_COLOR)
+        .setTitle(`📋 Whitelist (${entries.length})`)
+        .setDescription(lines.join('\n'))
+        .setFooter({ text: 'Karma Gold' })
+        .setTimestamp();
+      
+      await msg.reply({ embeds: [embed] });
       return;
     }
 
@@ -1442,16 +1800,18 @@ client.on('messageCreate', async (msg) => {
       
       const scriptCount = db.prepare('SELECT COUNT(*) as count FROM scripts WHERE user_id = ?').get(dbUser.id).count;
       const keyCount = db.prepare('SELECT COUNT(*) as count FROM keys WHERE user_id = ?').get(dbUser.id).count;
+      const wlCount = db.prepare('SELECT COUNT(*) as count FROM whitelist WHERE user_id = ?').get(dbUser.id).count;
       
       const embed = new EmbedBuilder()
         .setColor(BRAND_COLOR)
-        .setTitle('Karma Hosting - Setup')
+        .setTitle('✨ Karma Gold - Setup Complete')
         .setDescription(`Account ${dbUser ? 'loaded' : 'created'}!`)
         .addFields(
           { name: 'Scripts', value: String(scriptCount), inline: true },
-          { name: 'Keys', value: String(keyCount), inline: true }
+          { name: 'Keys', value: String(keyCount), inline: true },
+          { name: 'Whitelisted', value: String(wlCount), inline: true }
         )
-        .setFooter({ text: 'Karma Hosting' })
+        .setFooter({ text: 'Karma Gold v6.5' })
         .setTimestamp();
       
       await msg.reply({ embeds: [embed] });
@@ -1474,7 +1834,7 @@ client.on('messageCreate', async (msg) => {
         .setColor(BRAND_COLOR)
         .setTitle(`Your Scripts (${scripts.length})`)
         .setDescription(lines.join('\n'))
-        .setFooter({ text: 'Karma Hosting' })
+        .setFooter({ text: 'Karma Gold' })
         .setTimestamp();
       
       await msg.reply({ embeds: [embed] });
@@ -1485,19 +1845,12 @@ client.on('messageCreate', async (msg) => {
       if (!user) return msg.reply('Use /setup first.');
       
       const scriptName = args[0];
-      if (!scriptName) return msg.reply('Usage: /createkey <script> [note] [hours]');
+      if (!scriptName) return msg.reply('Usage: /createkey <script> [hours]');
       
-      let note = null;
       let hours = null;
       if (args.length >= 2) {
-        const lastArg = args[args.length - 1];
-        const parsed = parseInt(lastArg);
-        if (!isNaN(parsed) && String(parsed) === lastArg) {
-          hours = parsed;
-          if (args.length > 2) note = args.slice(1, -1).join(' ');
-        } else {
-          note = args.slice(1).join(' ');
-        }
+        const parsed = parseInt(args[1]);
+        if (!isNaN(parsed)) hours = parsed;
       }
       
       const script = db.prepare('SELECT * FROM scripts WHERE user_id = ? AND name = ?').get(user.id, scriptName);
@@ -1508,28 +1861,54 @@ client.on('messageCreate', async (msg) => {
       const id = makeId('key');
       
       db.prepare(`
-        INSERT INTO keys (id, script_id, user_id, key, note, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(id, script.id, user.id, key, note || '', expiresAt);
+        INSERT INTO keys (id, script_id, user_id, key, expires_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(id, script.id, user.id, key, expiresAt);
       
       const embed = new EmbedBuilder()
         .setColor(BRAND_COLOR)
-        .setTitle('✅ Key Generated')
+        .setTitle('✨ Key Generated')
         .setDescription([
           `**Script:** ${script.name}`,
           `**Key:** \`${key}\``,
-          note ? `**Note:** ${note}` : null,
           hours > 0 ? `**Expires:** ${formatExpiry(expiresAt)}` : '**Duration:** Permanent'
-        ].filter(Boolean).join('\n'))
-        .setFooter({ text: 'Karma Hosting' })
+        ].join('\n'))
+        .setFooter({ text: 'Karma Gold' })
         .setTimestamp();
       
       try {
         await msg.author.send({ embeds: [embed] });
-        await msg.reply(`Key for ${script.name} sent to your DMs.`);
+        await msg.reply(`Key for ${script.name} sent to your DMs. ✨`);
       } catch {
         await msg.reply({ embeds: [embed] });
       }
+      return;
+    }
+
+    if (cmd === 'keys') {
+      if (!user) return msg.reply('Use /setup first.');
+      
+      const keys = db.prepare('SELECT * FROM keys WHERE user_id = ? ORDER BY created_at DESC').all(user.id);
+      if (!keys.length) {
+        return msg.reply('No keys found.');
+      }
+      
+      const lines = keys.map(k => {
+        const isExpired = k.expires_at && new Date(k.expires_at).getTime() < Date.now();
+        const status = isExpired ? '⛔' : '✅';
+        const hwid = k.hwid ? '🔒' : '🔓';
+        const expiry = k.expires_at ? formatExpiry(k.expires_at) : 'Permanent';
+        return `${status} ${hwid} ${maskKey(k.key)} - ${expiry}`;
+      });
+      
+      const embed = new EmbedBuilder()
+        .setColor(BRAND_COLOR)
+        .setTitle(`Your Keys (${keys.length})`)
+        .setDescription(lines.join('\n'))
+        .setFooter({ text: 'Karma Gold' })
+        .setTimestamp();
+      
+      await msg.reply({ embeds: [embed] });
       return;
     }
 
@@ -1543,6 +1922,8 @@ client.on('messageCreate', async (msg) => {
       if (!keyRecord) return msg.reply('Key not found.');
       
       db.prepare('DELETE FROM keys WHERE key = ? AND user_id = ?').run(rawKey, user.id);
+      db.prepare('DELETE FROM whitelist WHERE key = ? AND user_id = ?').run(rawKey, user.id);
+      
       await msg.reply(`✅ Key ${maskKey(rawKey)} revoked.`);
       return;
     }
@@ -1564,7 +1945,13 @@ client.on('messageCreate', async (msg) => {
       }
       
       db.prepare('UPDATE keys SET hwid = NULL, resettable = CURRENT_TIMESTAMP WHERE key = ?').run(rawKey);
-      await msg.reply(`✅ HWID reset for ${maskKey(rawKey)}.`);
+      
+      const wlEntry = db.prepare('SELECT * FROM whitelist WHERE key = ? AND user_id = ?').get(rawKey, user.id);
+      if (wlEntry) {
+        db.prepare('UPDATE whitelist SET hwid = NULL WHERE id = ?').run(wlEntry.id);
+      }
+      
+      await msg.reply(`✅ HWID reset for ${maskKey(rawKey)}. You can now use it on a new device.`);
       return;
     }
 
@@ -1579,9 +1966,9 @@ client.on('messageCreate', async (msg) => {
       
       const panelEmbed = new EmbedBuilder()
         .setColor(BRAND_COLOR)
-        .setTitle(script.name)
+        .setTitle(`✨ ${script.name}`)
         .setDescription('Use the buttons below to manage your key.')
-        .setFooter({ text: 'Karma Hosting' })
+        .setFooter({ text: 'Karma Gold' })
         .setTimestamp();
       
       const row1 = new ActionRowBuilder().addComponents(
@@ -1617,6 +2004,18 @@ client.on('messageCreate', async (msg) => {
       return;
     }
 
+    if (cmd === 'checkhwid' && msg.author.id === OWNER_ID) {
+      const hwid = args[0];
+      if (!hwid) return msg.reply('Usage: /checkhwid <hwid>');
+      const banned = db.prepare('SELECT * FROM banned_hwids WHERE hwid = ?').get(hwid);
+      if (banned) {
+        await msg.reply(`🚫 HWID ${hwid} is BANNED.`);
+      } else {
+        await msg.reply(`✅ HWID ${hwid} is NOT banned.`);
+      }
+      return;
+    }
+
   } catch (e) {
     console.error('Command error:', e);
     await msg.reply('❌ Something went wrong.');
@@ -1645,6 +2044,7 @@ client.on('interactionCreate', async (interaction) => {
     switch (action) {
       case 'v': {
         const keyCount = db.prepare('SELECT COUNT(*) as count FROM keys WHERE script_id = ? AND user_id = ?').get(scriptId, user.id).count;
+        const wlCount = db.prepare('SELECT COUNT(*) as count FROM whitelist WHERE script_id = ? AND user_id = ?').get(scriptId, user.id).count;
         const embed = new EmbedBuilder()
           .setColor(BRAND_COLOR)
           .setTitle(script.name)
@@ -1652,9 +2052,10 @@ client.on('interactionCreate', async (interaction) => {
             { name: 'Version', value: script.version || '1.0.0', inline: true },
             { name: 'Status', value: script.status === 'active' ? '✅ Active' : '⛔ Disabled', inline: true },
             { name: 'Keys', value: String(keyCount), inline: true },
+            { name: 'Whitelisted', value: String(wlCount), inline: true },
             { name: 'ID', value: script.id, inline: true }
           )
-          .setFooter({ text: 'Karma Hosting' })
+          .setFooter({ text: 'Karma Gold' })
           .setTimestamp();
         await interaction.reply({ embeds: [embed], ephemeral: true });
         break;
@@ -1683,14 +2084,14 @@ client.on('interactionCreate', async (interaction) => {
           const isExpired = k.expires_at && new Date(k.expires_at).getTime() < Date.now();
           const status = isExpired ? '⛔ Expired' : '✅ Active';
           const expiry = k.expires_at ? formatExpiry(k.expires_at) : 'Permanent';
-          const hwid = k.hwid ? k.hwid.slice(0, 12) + '...' : 'None';
-          return `${status} | ${maskKey(k.key)} | HWID: ${hwid} | ${expiry}${k.note ? ' | Note: ' + k.note : ''}`;
+          const hwid = k.hwid ? '🔒 HWID Locked' : '🔓 No HWID';
+          return `${status} | ${maskKey(k.key)} | ${hwid} | ${expiry}`;
         });
         const embed = new EmbedBuilder()
           .setColor(BRAND_COLOR)
           .setTitle('Key Info')
           .setDescription(lines.join('\n'))
-          .setFooter({ text: 'Karma Hosting' })
+          .setFooter({ text: 'Karma Gold' })
           .setTimestamp();
         await interaction.reply({ embeds: [embed], ephemeral: true });
         break;
@@ -1751,7 +2152,7 @@ client.on('interactionCreate', async (interaction) => {
       }
       
       db.prepare('UPDATE keys SET last_used_at = CURRENT_TIMESTAMP WHERE key = ?').run(keyVal);
-      await interaction.reply({ content: '✅ Key redeemed successfully!', ephemeral: true });
+      await interaction.reply({ content: '✅ Key redeemed successfully! ✨', ephemeral: true });
     }
     
     if (customId.startsWith('hm_')) {
@@ -1771,7 +2172,13 @@ client.on('interactionCreate', async (interaction) => {
       }
       
       db.prepare('UPDATE keys SET hwid = NULL, resettable = CURRENT_TIMESTAMP WHERE key = ?').run(keyVal);
-      await interaction.reply({ content: '🔄 HWID reset successfully!', ephemeral: true });
+      
+      const wlEntry = db.prepare('SELECT * FROM whitelist WHERE key = ? AND user_id = ?').get(keyVal, user.id);
+      if (wlEntry) {
+        db.prepare('UPDATE whitelist SET hwid = NULL WHERE id = ?').run(wlEntry.id);
+      }
+      
+      await interaction.reply({ content: '🔄 HWID reset successfully! You can now use the key on a new device. ✨', ephemeral: true });
     }
   } catch (e) {
     console.error('Modal error:', e);
@@ -1779,32 +2186,106 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-// ---------------- Loader Routes ----------------
+// ---------------- Loader Routes - HWID Protected ----------------
 app.get('/loader/:scriptId', (req, res) => {
-  const { scriptId, key } = req.query;
+  const { scriptId, key, hwid } = req.query;
   if (!scriptId) return res.status(400).type('text/plain').send('-- Missing script ID');
   
   const script = db.prepare('SELECT * FROM scripts WHERE id = ?').get(scriptId);
   if (!script) return res.status(404).type('text/plain').send('-- Script not found');
   
-  // If key is provided, verify it
-  if (key) {
-    const keyRecord = db.prepare('SELECT * FROM keys WHERE key = ? AND script_id = ?').get(key, scriptId);
-    if (!keyRecord) return res.status(403).type('text/plain').send('-- Invalid key');
-    if (keyRecord.expires_at && new Date(keyRecord.expires_at).getTime() < Date.now()) {
-      return res.status(403).type('text/plain').send('-- Key expired');
-    }
-    db.prepare('UPDATE keys SET last_used_at = CURRENT_TIMESTAMP WHERE key = ?').run(key);
+  if (script.status === 'disabled') {
+    return res.status(403).type('text/plain').send('-- Script is disabled');
   }
   
+  if (!key) {
+    return res.status(403).type('text/plain').send('-- Missing key parameter');
+  }
+  
+  const keyRecord = db.prepare('SELECT * FROM keys WHERE key = ? AND script_id = ?').get(key, scriptId);
+  if (!keyRecord) {
+    return res.status(403).type('text/plain').send('-- Invalid key');
+  }
+  
+  if (keyRecord.expires_at && new Date(keyRecord.expires_at).getTime() < Date.now()) {
+    return res.status(403).type('text/plain').send('-- Key expired');
+  }
+  
+  if (hwid) {
+    const banned = db.prepare('SELECT * FROM banned_hwids WHERE hwid = ?').get(hwid);
+    if (banned) {
+      return res.status(403).type('text/plain').send('-- HWID is banned');
+    }
+  }
+  
+  if (hwid && !keyRecord.hwid) {
+    db.prepare('UPDATE keys SET hwid = ?, last_used_at = CURRENT_TIMESTAMP WHERE key = ?').run(hwid, key);
+    const wlEntry = db.prepare('SELECT * FROM whitelist WHERE key = ?').get(key);
+    if (wlEntry) {
+      db.prepare('UPDATE whitelist SET hwid = ? WHERE id = ?').run(hwid, wlEntry.id);
+    }
+  }
+  
+  if (hwid && keyRecord.hwid && keyRecord.hwid !== hwid) {
+    return res.status(403).type('text/plain').send('-- HWID mismatch. Use /reset-hwid <key> to reset (24h cooldown)');
+  }
+  
+  db.prepare('UPDATE keys SET last_used_at = CURRENT_TIMESTAMP WHERE key = ?').run(key);
+  
   const baseUrl = publicBaseUrl();
-  const loadstring = `loadstring(game:HttpGet("${baseUrl}/script/${scriptId}"))()`;
-  res.type('text/plain').send(`--[[ Karma Protection Loader ]]\nreturn (function()\n  local url = "${baseUrl}/script/${scriptId}"\n  local src = game:HttpGet(url)\n  if not src or #src < 10 then error("Invalid script payload") end\n  local func, err = loadstring(src, "@KarmaVM")\n  if not func then error(err) end\n  return func()\nend)()`);
+  // The loader string now uses your Render URL
+  const loadstring = `loadstring(game:HttpGet("${baseUrl}/script/${scriptId}?hwid=${hwid || ''}&key=${key}"))()`;
+  
+  res.type('text/plain').send(`--[[ ✨ Karma Gold Loader v6.5 ✨ ]]\n-- HWID Protected\nreturn (function()\n  local url = "${baseUrl}/script/${scriptId}?hwid=${hwid || ''}&key=${key}"\n  local src = game:HttpGet(url)\n  if not src or #src < 10 then error("Invalid script payload") end\n  local func, err = loadstring(src, "@KarmaGold")\n  if not func then error(err) end\n  return func()\nend)()`);
 });
 
 app.get('/script/:scriptId', (req, res) => {
   const script = db.prepare('SELECT * FROM scripts WHERE id = ?').get(req.params.scriptId);
   if (!script) return res.status(404).type('text/plain').send('-- Script not found');
+  
+  if (script.status === 'disabled') {
+    return res.status(403).type('text/plain').send('-- Script is disabled');
+  }
+  
+  if (script.ffa_mode) {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.type('text/plain').send(script.code || '-- Empty script');
+  }
+  
+  const { key, hwid } = req.query;
+  if (!key) {
+    return res.status(403).type('text/plain').send('-- Missing key');
+  }
+  
+  const keyRecord = db.prepare('SELECT * FROM keys WHERE key = ? AND script_id = ?').get(key, req.params.scriptId);
+  if (!keyRecord) {
+    return res.status(403).type('text/plain').send('-- Invalid key');
+  }
+  
+  if (keyRecord.expires_at && new Date(keyRecord.expires_at).getTime() < Date.now()) {
+    return res.status(403).type('text/plain').send('-- Key expired');
+  }
+  
+  if (hwid) {
+    const banned = db.prepare('SELECT * FROM banned_hwids WHERE hwid = ?').get(hwid);
+    if (banned) {
+      return res.status(403).type('text/plain').send('-- HWID is banned');
+    }
+  }
+  
+  if (hwid && keyRecord.hwid && keyRecord.hwid !== hwid) {
+    return res.status(403).type('text/plain').send('-- HWID mismatch. Use /reset-hwid <key> to reset');
+  }
+  
+  if (hwid && !keyRecord.hwid) {
+    db.prepare('UPDATE keys SET hwid = ?, last_used_at = CURRENT_TIMESTAMP WHERE key = ?').run(hwid, key);
+    const wlEntry = db.prepare('SELECT * FROM whitelist WHERE key = ?').get(key);
+    if (wlEntry) {
+      db.prepare('UPDATE whitelist SET hwid = ? WHERE id = ?').run(hwid, wlEntry.id);
+    }
+  }
+  
+  db.prepare('UPDATE keys SET last_used_at = CURRENT_TIMESTAMP WHERE key = ?').run(key);
   
   res.setHeader('Cache-Control', 'no-store');
   res.type('text/plain').send(script.code || '-- Empty script');
@@ -1838,10 +2319,9 @@ async function deployCommands() {
   }
 
   app.listen(port, '0.0.0.0', () => {
-    console.log(`Karma Protection v6.3 running on port ${port}`);
-    console.log(`Website: http://localhost:${port}`);
-    console.log(`Public URL: ${publicBaseUrl()}`);
-    console.log(`Discord Bot: ${client.user ? client.user.tag : 'starting...'}`);
+    console.log(`✨ Karma Gold v6.5 running on port ${port}`);
+    console.log(`🌐 Website: ${publicBaseUrl()}`);
+    console.log(`📱 Bot: ${client.user ? client.user.tag : 'starting...'}`);
   });
   
   await client.login(DISCORD_TOKEN);
