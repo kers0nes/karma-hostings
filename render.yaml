@@ -2,22 +2,6 @@ services:
   - type: web
     name: karma-protection
     env: python
+    pythonVersion: 3.11.0
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
-    envVars:
-      - key: DATABASE_URL
-        sync: false
-      - key: DISCORD_TOKEN
-        sync: false
-      - key: CLIENT_ID
-        sync: false
-      - key: CLIENT_SECRET
-        sync: false
-      - key: GUILD_ID
-        sync: false
-      - key: PUBLIC_BASE_URL
-        sync: false
-      - key: SESSION_SECRET
-        sync: false
-      - key: OWNER_ID
-        sync: false
