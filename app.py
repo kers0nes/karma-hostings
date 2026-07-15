@@ -9,7 +9,8 @@ from flask_session import Session
 from dotenv import load_dotenv
 import requests as http_requests
 import discord
-from discord import Embed, ButtonStyle, ActionRow, Button, Modal, InputText, InputTextStyle
+from discord import Embed, ButtonStyle
+from discord.ui import Button, View, Modal, InputText
 from discord.ext import commands
 
 import database as db
@@ -39,7 +40,7 @@ app.secret_key = SESSION_SECRET
 app.config["SESSION_TYPE"] = "filesystem"
 Session(app)
 
-# ---- Discord Bot Client (embedded, like original server.js) ----
+# ---- Discord Bot Client ----
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -300,12 +301,16 @@ async def on_message(msg):
         embed = Embed(color=BRAND_COLOR, title=script["name"], description="Use the buttons below.")
         embed.set_footer(text="Karma Protection").timestamp = discord.utils.utcnow()
         sid = script["id"]
-        row1 = ActionRow(Button(style=ButtonStyle.primary, label="View", custom_id=f"pv_{sid}"))
-        row2 = ActionRow(Button(style=ButtonStyle.success, label="Redeem", custom_id=f"pr_{sid}"))
-        row3 = ActionRow(Button(style=ButtonStyle.secondary, label="Keys", custom_id=f"pi_{sid}"))
-        row4 = ActionRow(Button(style=ButtonStyle.secondary, label="Loader", custom_id=f"pl_{sid}"))
-        row5 = ActionRow(Button(style=ButtonStyle.danger, label="Reset HWID", custom_id=f"ph_{sid}"))
-        await msg.reply(embed=embed, components=[row1, row2, row3, row4, row5])
+        
+        # Create a view with buttons
+        view = View()
+        view.add_item(Button(style=ButtonStyle.primary, label="View", custom_id=f"pv_{sid}"))
+        view.add_item(Button(style=ButtonStyle.success, label="Redeem", custom_id=f"pr_{sid}"))
+        view.add_item(Button(style=ButtonStyle.secondary, label="Keys", custom_id=f"pi_{sid}"))
+        view.add_item(Button(style=ButtonStyle.secondary, label="Loader", custom_id=f"pl_{sid}"))
+        view.add_item(Button(style=ButtonStyle.danger, label="Reset HWID", custom_id=f"ph_{sid}"))
+        
+        await msg.reply(embed=embed, view=view)
         return
 
     if str(msg.author.id) == OWNER_ID:
@@ -363,7 +368,7 @@ async def on_interaction(interaction):
             await interaction.response.send_message(embed=embed, ephemeral=True)
         elif action == "r":
             modal = Modal(title="Redeem Key", custom_id=f"rm_{script_id}")
-            modal.add_item(InputText(label="Enter license key", custom_id="key_input", style=InputTextStyle.short, required=True))
+            modal.add_item(InputText(label="Enter license key", custom_id="key_input", style=discord.InputTextStyle.short, required=True))
             await interaction.response.send_modal(modal)
         elif action == "i":
             keys = db.fetchall("SELECT * FROM license_keys WHERE script_id = %s AND user_id = %s ORDER BY created_at DESC",
@@ -389,7 +394,7 @@ async def on_interaction(interaction):
             await interaction.response.send_message(f"```lua\nloadstring(game:HttpGet(\"{url}\"))()\n```", ephemeral=True)
         elif action == "h":
             modal = Modal(title="Reset HWID", custom_id=f"hm_{script_id}")
-            modal.add_item(InputText(label="Enter license key", custom_id="key_input", style=InputTextStyle.short, required=True))
+            modal.add_item(InputText(label="Enter license key", custom_id="key_input", style=discord.InputTextStyle.short, required=True))
             await interaction.response.send_modal(modal)
 
     elif interaction.type == discord.InteractionType.modal_submit:
@@ -1022,7 +1027,7 @@ def serve_script(script_id):
     return script.get("code", "-- Empty"), 200, {"Content-Type": "text/plain", "Cache-Control": "no-store"}
 
 
-# ---- Start (runs even with gunicorn) ----
+# ---- Start ----
 
 def start_bot_in_thread():
     t = threading.Thread(target=run_bot, daemon=True)
