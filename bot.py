@@ -38,19 +38,27 @@ def panel_embed():
         title="License Panel",
         description="Use the buttons below to manage your script access.",
         color=0x5865f2,
-    ).add_fields(
-        discord.EmbedField(name="Redeem Key", value="Claim a license key and get the customer role.", inline=False),
-        discord.EmbedField(name="Reset HWID", value="Clear the device lock on your redeemed key.", inline=False),
-        discord.EmbedField(name="My Keys", value="View your redeemed licenses.", inline=False),
+    ).add_field(
+        name="Redeem Key", 
+        value="Claim a license key and get the customer role.", 
+        inline=False
+    ).add_field(
+        name="Reset HWID", 
+        value="Clear the device lock on your redeemed key.", 
+        inline=False
+    ).add_field(
+        name="My Keys", 
+        value="View your redeemed licenses.", 
+        inline=False
     ).set_footer(text="Polsec-like license system")
 
 
 def panel_buttons():
     return [
         ActionRow(
-            Button(custom_id="panel_redeem", label="Redeem Key", emoji="✅", style=ButtonStyle.success),
-            Button(custom_id="panel_reset_hwid", label="Reset HWID", emoji="🖥️", style=ButtonStyle.primary),
-            Button(custom_id="panel_mykeys", label="My Keys", emoji="🔑", style=ButtonStyle.secondary),
+            Button(style=ButtonStyle.success, label="Redeem Key", emoji="✅", custom_id="panel_redeem"),
+            Button(style=ButtonStyle.primary, label="Reset HWID", emoji="🖥️", custom_id="panel_reset_hwid"),
+            Button(style=ButtonStyle.secondary, label="My Keys", emoji="🔑", custom_id="panel_mykeys"),
         )
     ]
 
@@ -180,7 +188,7 @@ async def handle_command(interaction):
             "panel_channel_id": str(panel_channel["id"]),
         })
 
-        panel_msg = await interaction.channel.send(embeds=[panel_embed()], components=panel_buttons())
+        panel_msg = await interaction.channel.send(embed=panel_embed(), components=panel_buttons())
         db.upsert_settings(str(interaction.guild_id), {"panel_message_id": str(panel_msg.id)})
 
         await interaction.response.send_message(
@@ -338,14 +346,14 @@ async def handle_button(interaction):
     custom_id = interaction.data["custom_id"]
 
     if custom_id == "panel_redeem":
-        modal = Modal(custom_id="modal_redeem", title="Redeem License Key")
-        modal.add_item(InputText(custom_id="key", label="License key", style=InputTextStyle.short, required=True))
+        modal = Modal(title="Redeem License Key", custom_id="modal_redeem")
+        modal.add_item(InputText(label="License key", custom_id="key", style=InputTextStyle.short, required=True))
         await interaction.response.send_modal(modal)
         return
 
     if custom_id == "panel_reset_hwid":
-        modal = Modal(custom_id="modal_reset_hwid", title="Reset HWID")
-        modal.add_item(InputText(custom_id="key", label="License key", style=InputTextStyle.short, required=True))
+        modal = Modal(title="Reset HWID", custom_id="modal_reset_hwid")
+        modal.add_item(InputText(label="License key", custom_id="key", style=InputTextStyle.short, required=True))
         await interaction.response.send_modal(modal)
         return
 
