@@ -46,7 +46,7 @@ intents.message_content = True
 intents.members = True
 intents.dm_messages = True
 
-bot = discord.Bot(intents=intents, activity=discord.Activity(type=discord.ActivityType.watching, name="Karma Protection | /help"))
+bot = commands.Bot(intents=intents, activity=discord.Activity(type=discord.ActivityType.watching, name="Karma Protection | /help"))
 
 
 @bot.event
@@ -300,11 +300,11 @@ async def on_message(msg):
         embed = Embed(color=BRAND_COLOR, title=script["name"], description="Use the buttons below.")
         embed.set_footer(text="Karma Protection").timestamp = discord.utils.utcnow()
         sid = script["id"]
-        row1 = ActionRow(Button(custom_id=f"pv_{sid}", label="View", style=ButtonStyle.primary))
-        row2 = ActionRow(Button(custom_id=f"pr_{sid}", label="Redeem", style=ButtonStyle.success))
-        row3 = ActionRow(Button(custom_id=f"pi_{sid}", label="Keys", style=ButtonStyle.secondary))
-        row4 = ActionRow(Button(custom_id=f"pl_{sid}", label="Loader", style=ButtonStyle.secondary))
-        row5 = ActionRow(Button(custom_id=f"ph_{sid}", label="Reset HWID", style=ButtonStyle.danger))
+        row1 = ActionRow(Button(style=ButtonStyle.primary, label="View", custom_id=f"pv_{sid}"))
+        row2 = ActionRow(Button(style=ButtonStyle.success, label="Redeem", custom_id=f"pr_{sid}"))
+        row3 = ActionRow(Button(style=ButtonStyle.secondary, label="Keys", custom_id=f"pi_{sid}"))
+        row4 = ActionRow(Button(style=ButtonStyle.secondary, label="Loader", custom_id=f"pl_{sid}"))
+        row5 = ActionRow(Button(style=ButtonStyle.danger, label="Reset HWID", custom_id=f"ph_{sid}"))
         await msg.reply(embed=embed, components=[row1, row2, row3, row4, row5])
         return
 
@@ -362,8 +362,8 @@ async def on_interaction(interaction):
             embed.set_footer(text="Karma Protection").timestamp = discord.utils.utcnow()
             await interaction.response.send_message(embed=embed, ephemeral=True)
         elif action == "r":
-            modal = Modal(custom_id=f"rm_{script_id}", title="Redeem Key")
-            modal.add_item(InputText(custom_id="key_input", label="Enter license key", style=InputTextStyle.short, required=True))
+            modal = Modal(title="Redeem Key", custom_id=f"rm_{script_id}")
+            modal.add_item(InputText(label="Enter license key", custom_id="key_input", style=InputTextStyle.short, required=True))
             await interaction.response.send_modal(modal)
         elif action == "i":
             keys = db.fetchall("SELECT * FROM license_keys WHERE script_id = %s AND user_id = %s ORDER BY created_at DESC",
@@ -388,8 +388,8 @@ async def on_interaction(interaction):
             url = f'{db.public_base_url()}/loader/{script_id}?key={key["key"]}'
             await interaction.response.send_message(f"```lua\nloadstring(game:HttpGet(\"{url}\"))()\n```", ephemeral=True)
         elif action == "h":
-            modal = Modal(custom_id=f"hm_{script_id}", title="Reset HWID")
-            modal.add_item(InputText(custom_id="key_input", label="Enter license key", style=InputTextStyle.short, required=True))
+            modal = Modal(title="Reset HWID", custom_id=f"hm_{script_id}")
+            modal.add_item(InputText(label="Enter license key", custom_id="key_input", style=InputTextStyle.short, required=True))
             await interaction.response.send_modal(modal)
 
     elif interaction.type == discord.InteractionType.modal_submit:
